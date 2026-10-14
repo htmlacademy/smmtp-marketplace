@@ -1,0 +1,27 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "news",
+  "version": "0.2.0",
+  "description": "Ищет новости в архиве по дате, категории, сайту, автору и языку, читает текст материала.",
+  "author": {
+    "name": "Алексей Симоненко",
+    "email": "alexey@simonenko.dev",
+    "url": "https://smmtp.ru"
+  },
+  "homepage": "https://smmtp.ru",
+  "repository": "https://github.com/htmlacademy/smmtp-marketplace",
+  "license": "MIT",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "News",
+        "shortDescription": "Поиск новостей в архиве и чтение материалов",
+        "developerName": "Алексей Симоненко",
+        "category": "Productivity",
+        "websiteURL": "https://smmtp.ru",
+        "composerIcon": "./assets/logo.png",
+        "logo": "./assets/logo.png"
+      }
+    }
+  }
+}

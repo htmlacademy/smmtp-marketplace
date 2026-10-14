@@ -1,0 +1,32 @@
+{
+  "name": "smmtp",
+  "interface": {
+    "displayName": "smmtp"
+  },
+  "plugins": [
+    {
+      "name": "amplify",
+      "source": {
+        "source": "local",
+        "path": "./plugins/amplify"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "news",
+      "source": {
+        "source": "local",
+        "path": "./plugins/news"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

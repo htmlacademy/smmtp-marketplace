@@ -1,0 +1,73 @@
+# Crossposting settings, read by amplify.py.
+#
+# .config holds the values, secrets included, and never goes into git.
+# .config.local beside it is the example: the same names without secrets, and
+# it may be committed; a teammate copies it to .config and fills it in.
+# One NAME=value per line. A line starting with # is a comment; a # after a
+# value is part of the value. An empty value counts as not set.
+# The amplify-setup skill fills .config in step by step and checks it.
+
+# Service: its https root, without a path, and a token, both from https://smmtp.ru or mail@smmtp.ru.
+AMPLIFY_REST_URL=
+AMPLIFY_REST_TOKEN=
+
+# Media gateway, for posts with images or videos: set both or neither.
+AMPLIFY_MEDIA_GATEWAY_URL=
+AMPLIFY_MEDIA_GATEWAY_TOKEN=
+
+# Read the secrets below from a store instead of this file. {name} becomes the
+# variable's name, one store item per variable. macOS keychain:
+# AMPLIFY_REST_SECRET_COMMAND=security find-generic-password -s {name} -w
+
+# A certificate bundle to trust, when the first call fails with
+# CERTIFICATE_VERIFY_FAILED. macOS:
+# SSL_CERT_FILE=/etc/ssl/cert.pem
+
+# Platforms: fill in only the ones you publish to. `amplify.py doctor` names
+# what each one needs, and amplify-setup explains where to get it.
+
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+# Stories go through a business connection instead of the chat.
+TELEGRAM_BUSINESS_CONNECTION_ID=
+
+MAX_BOT_TOKEN=
+MAX_CHAT_ID=
+
+VK_ACCESS_TOKEN=
+VK_OWNER_ID=
+
+FACEBOOK_PAGE_ID=
+FACEBOOK_ACCESS_TOKEN=
+
+INSTAGRAM_USER_ID=
+INSTAGRAM_ACCESS_TOKEN=
+
+THREADS_USER_ID=
+THREADS_ACCESS_TOKEN=
+
+TWITTER_ACCESS_TOKEN=
+
+LINKEDIN_ACCESS_TOKEN=
+LINKEDIN_AUTHOR_ID=
+
+MASTODON_ACCESS_TOKEN=
+MASTODON_HOST=
+
+# The host stays bsky.social unless the account lives on another server.
+BLUESKY_IDENTIFIER=
+BLUESKY_PASSWORD=
+BLUESKY_HOST=bsky.social
+
+SLACK_ACCESS_TOKEN=
+SLACK_CHANNEL=
+
+DISCORD_WEBHOOK_ID=
+DISCORD_WEBHOOK_TOKEN=
+
+YOUTUBE_CLIENT_ID=
+YOUTUBE_CLIENT_SECRET=
+YOUTUBE_REFRESH_TOKEN=
+
+TIKTOK_BUSINESS_ID=
+TIKTOK_ACCESS_TOKEN=

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "amplify",
+  "displayName": "Amplify",
+  "version": "0.6.0",
+  "description": "Кросспостинг через сервис: пошаговая настройка с проверкой, затем один пост сразу на несколько площадок с превью по каждой до публикации.",
+  "author": {
+    "name": "Алексей Симоненко",
+    "email": "alexey@simonenko.dev",
+    "url": "https://smmtp.ru"
+  },
+  "homepage": "https://smmtp.ru",
+  "repository": "https://github.com/htmlacademy/smmtp-marketplace",
+  "license": "MIT"
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "smmtp",
+  "owner": {
+    "name": "Алексей Симоненко",
+    "email": "alexey@simonenko.dev",
+    "url": "https://smmtp.ru"
+  },
+  "description": "Плагины smmtp для Codex, Claude Code и Claude Cowork",
+  "version": "1.0.0",
+  "plugins": [
+    {
+      "name": "amplify",
+      "displayName": "Amplify",
+      "version": "0.6.0",
+      "description": "Кросспостинг через сервис: пошаговая настройка с проверкой, затем один пост сразу на несколько площадок с превью по каждой до публикации.",
+      "source": "./plugins/amplify",
+      "category": "productivity"
+    },
+    {
+      "name": "news",
+      "displayName": "News",
+      "version": "0.2.0",
+      "description": "Ищет новости в архиве по дате, категории, сайту, автору и языку, читает текст материала.",
+      "source": "./plugins/news",
+      "category": "productivity"
+    }
+  ]
+}

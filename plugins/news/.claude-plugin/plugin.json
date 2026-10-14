@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "news",
+  "displayName": "News",
+  "version": "0.2.0",
+  "description": "Ищет новости в архиве по дате, категории, сайту, автору и языку, читает текст материала.",
+  "author": {
+    "name": "Алексей Симоненко",
+    "email": "alexey@simonenko.dev",
+    "url": "https://smmtp.ru"
+  },
+  "homepage": "https://smmtp.ru",
+  "repository": "https://github.com/htmlacademy/smmtp-marketplace",
+  "license": "MIT"
+}
