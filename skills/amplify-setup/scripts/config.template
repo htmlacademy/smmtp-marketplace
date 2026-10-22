@@ -1,11 +1,11 @@
 # Crossposting settings, read by amplify.py.
 #
-# .config holds the values, secrets included, and never goes into git.
-# .config.local beside it is the example: the same names without secrets, and
-# it may be committed; a teammate copies it to .config and fills it in.
+# .env.local holds the values, secrets included.
+# .env.example beside it is the example: the same names without secrets, to
+# share; a teammate copies it to .env.local and fills it in.
 # One NAME=value per line. A line starting with # is a comment; a # after a
 # value is part of the value. An empty value counts as not set.
-# The amplify-setup skill fills .config in step by step and checks it.
+# The amplify-setup skill fills .env.local in step by step and checks it.
 
 # Service: its https root, without a path, and a token, both from https://smmtp.ru or mail@smmtp.ru.
 AMPLIFY_REST_URL=
@@ -15,8 +15,9 @@ AMPLIFY_REST_TOKEN=
 AMPLIFY_MEDIA_GATEWAY_URL=
 AMPLIFY_MEDIA_GATEWAY_TOKEN=
 
-# Read the secrets below from a store instead of this file. {name} becomes the
-# variable's name, one store item per variable. macOS keychain:
+# Read the secrets left empty below from a store instead of this file. No
+# store is read until this line is set. {name} becomes the variable's name,
+# one store item per variable. macOS keychain:
 # AMPLIFY_REST_SECRET_COMMAND=security find-generic-password -s {name} -w
 
 # A certificate bundle to trust, when the first call fails with

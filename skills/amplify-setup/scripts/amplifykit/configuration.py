@@ -1,11 +1,10 @@
-"""config: write .amplify/.config and its example, checking every value
-first, and keep the file out of git."""
+"""config: write .smmtp/.env.local and its example, checking every value
+first."""
 
 from __future__ import annotations
 
 import os
 import re
-import subprocess
 import tempfile
 from pathlib import Path
 
@@ -26,11 +25,10 @@ from .settings import (
     https_origin_problem,
 )
 
-TEMPLATE_PATH = Path(".amplify", ".config.local")
+EXAMPLE_PATH = Path(".smmtp", ".env.example")
 TEMPLATE_SOURCE = Path(__file__).resolve().parent.parent / "config.template"
 COMMENTED_SETTING = re.compile(r"#\s*([A-Z][A-Z0-9_]*)=")
 SECRET_NAME = re.compile(r"TOKEN|SECRET|PASSWORD|KEY|WEBHOOK")
-GIT_TIMEOUT_SECONDS = 10
 
 
 def parse_pairs(pairs):
@@ -196,39 +194,6 @@ def write_atomically(path, text, mode):
         raise
 
 
-def git_answer(root, *arguments):
-    """True or False as a git query exits 0 or 1, None outside a repository or
-    without git."""
-    try:
-        completed = subprocess.run(
-            ["git", *arguments],
-            cwd=root,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=GIT_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    return {0: True, 1: False}.get(completed.returncode)
-
-
-def git_state(root):
-    """Whether git ignores root/.amplify/.config, and whether it already
-    tracks it."""
-    relative = CONFIG_PATH.as_posix()
-    return (
-        git_answer(root, "check-ignore", "-q", relative),
-        git_answer(root, "ls-files", "--error-unmatch", relative),
-    )
-
-
-def append_line(path, line):
-    text = path.read_text(encoding="utf-8") if path.is_file() else ""
-    if text and not text.endswith("\n"):
-        text += "\n"
-    write_atomically(path, f"{text}{line}\n", 0o644)
-
-
 def write_config(root, pairs, dry_run, environ):
     values = parse_pairs(pairs)
     root = Path(root).expanduser()
@@ -237,26 +202,21 @@ def write_config(root, pairs, dry_run, environ):
             "config_unwritable",
             f"--root {root} is not a directory; pass the project root, or ~ for every project",
         )
-    config, example = root / CONFIG_PATH, root / TEMPLATE_PATH
+    config, example = root / CONFIG_PATH, root / EXAMPLE_PATH
     created = not config.is_file()
     current = settings.read_text(TEMPLATE_SOURCE if created else config)
     settings.parse_config(current, config)
     updated = merge(current, values, overwrite=True)
     checked, unchecked = validate(values, settings.parse_config(updated, config), environ)
-    ignored, tracked = git_state(root)
-    gitignore = None if ignored is None else {"path": str(root / ".gitignore"), "add": not ignored}
     report = {
         "ok": True,
         "dry_run": dry_run,
         "config": str(config),
         "created": created,
-        "template": str(example),
+        "example": str(example),
         "changes": planned_changes(current, values),
         "checked": checked,
         "unchecked": unchecked,
-        "gitignore": gitignore,
-        "git_ignored": ignored,
-        "git_tracked": tracked,
     }
     if dry_run:
         return report
@@ -265,13 +225,10 @@ def write_config(root, pairs, dry_run, environ):
         write_atomically(config, updated, 0o600)
         base = settings.read_text(example if example.is_file() else TEMPLATE_SOURCE)
         write_atomically(example, merge(base, shown, overwrite=False), 0o644)
-        if gitignore and gitignore["add"]:
-            append_line(root / ".gitignore", CONFIG_PATH.as_posix())
     except OSError as error:
         raise Fault(
             "config_unwritable",
             f"cannot write under {root}: {error.strerror}; check that --root is the intended"
             " directory and writable",
         )
-    report["git_ignored"], report["git_tracked"] = git_state(root)
     return report

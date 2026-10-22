@@ -4,13 +4,13 @@ without publishing anything."""
 from __future__ import annotations
 
 from . import settings, transport
-from .configuration import git_state
 from .errors import Fault
 from .platforms import (
     build_body,
     choose_form,
     complete_form,
     environment_name,
+    field_schema,
     resolve_credentials,
     schema_problem,
 )
@@ -75,14 +75,20 @@ def check_strategies(targets, schemas, lookup, verify, placement="post"):
                     "invalid": [
                         name for field, name in names.items()
                         if variables[name] is not None
-                        and isinstance(fields[field], dict)
-                        and schema_problem(lookup(name), fields[field])
+                        and schema_problem(lookup(name), field_schema(schema, field))
                     ],
                 }
     except (AttributeError, KeyError, TypeError):
         raise transport.unexpected_shape("GET", "/v1/capabilities")
 
-    section = {"available": sorted(schemas), "configured": configured}
+    section = {
+        "available": sorted(schemas),
+        "configured": configured,
+        "unverified": [
+            strategy for strategy, entry in configured.items()
+            if strategy not in targets and not entry["invalid"]
+        ],
+    }
     unknown = [strategy for strategy in targets if strategy not in schemas]
     if unknown:
         section["unknown"] = unknown
@@ -112,11 +118,10 @@ def doctor(targets, environ, cwd, placement="post"):
         "url": lookup(URL_VARIABLE),
         "variables": sources(lookup, (URL_VARIABLE, TOKEN_VARIABLE)),
     }
-    ignored, tracked = git_state(path.parent.parent) if path else (None, None)
     report = {
         "ok": False,
         "next": "service",
-        "config": {"path": str(path) if path else None, "git_ignored": ignored, "git_tracked": tracked},
+        "config": str(path) if path else None,
         "secret_command": (
             "environment" if environ.get(SECRET_COMMAND_VARIABLE)
             else "config" if config.get(SECRET_COMMAND_VARIABLE)
@@ -166,8 +171,9 @@ def settled(entry):
 
 def next_stage(report):
     """The first setup stage that is not done: service, media_gateway (partial
-    or invalid) or platforms; None when every stage the report can judge is
-    done."""
+    or invalid), platforms, or verify while a complete platform has not been
+    checked with its provider in this run; None when every stage the report
+    can judge is done."""
     if "error" in report["service"]:
         return "service"
     if report["media_gateway"]["state"] in ("partial", "invalid"):
@@ -176,7 +182,9 @@ def next_stage(report):
     configured = section["configured"].values()
     if section.get("unknown") or "error" in section or not configured:
         return "platforms"
-    return None if all(settled(entry) for entry in configured) else "platforms"
+    if not all(settled(entry) for entry in configured):
+        return "platforms"
+    return "verify" if section["unverified"] else None
 
 
 def problems(report):

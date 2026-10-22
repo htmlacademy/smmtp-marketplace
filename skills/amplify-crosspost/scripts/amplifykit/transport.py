@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 
 from .errors import Fault
-from .settings import CERTIFICATE_VARIABLE, HEADER_SAFE, TOKEN_VARIABLE, URL_VARIABLE
+from .settings import CERTIFICATE_VARIABLE, CONFIG_PATH, HEADER_SAFE, TOKEN_VARIABLE, URL_VARIABLE
 
 # The service lets one operation run for up to 600 s and answers when it ends
 # or pauses, so a shorter timeout abandons a publish that is still landing.
@@ -29,6 +29,7 @@ NOT_STARTED = {
     "RUN_CAPACITY_EXCEEDED",
     "RUN_LIMIT_EXCEEDED",
     "SERVER_BUSY",
+    "SPOOL_CAPACITY_EXCEEDED",
     "REQUEST_RECEIVE_TIMEOUT",
 }
 STARTED = {"RESULT_TOO_LARGE"}
@@ -73,7 +74,7 @@ def service(lookup):
         raise Fault(
             "environment_missing",
             f"not set: {', '.join(unset)}; the amplify-setup skill walks the operator through"
-            " adding them to .amplify/.config",
+            f" adding them to {CONFIG_PATH.as_posix()}",
         )
     if not url.startswith("https://") or not HEADER_SAFE.fullmatch(url):
         raise Fault(
@@ -98,9 +99,9 @@ def json_payload(body):
 def certificate_advice():
     bundle = next((path for path in CERTIFICATE_BUNDLES if os.path.isfile(path)), None)
     remedy = (
-        f"add {CERTIFICATE_VARIABLE}={bundle} to .amplify/.config"
+        f"add {CERTIFICATE_VARIABLE}={bundle} to {CONFIG_PATH.as_posix()}"
         if bundle
-        else f"add {CERTIFICATE_VARIABLE}, the path of a certificate bundle, to .amplify/.config"
+        else f"add {CERTIFICATE_VARIABLE}, the path of a certificate bundle, to {CONFIG_PATH.as_posix()}"
     )
     return (
         "the trust store of the Python running this script holds no issuer for that "
