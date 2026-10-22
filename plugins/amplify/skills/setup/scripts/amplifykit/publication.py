@@ -228,8 +228,6 @@ def summarise(command, result, media):
         else:
             if "url" in outcome:
                 entry["url"] = outcome["url"]
-            if "progress" in outcome:
-                entry["next_check_at"] = outcome["progress"].get("nextCheckAt")
 
         if other_changes:
             entry["changes"] = [
@@ -260,7 +258,7 @@ def outcome_ok(command, destinations, missing):
     )
 
 
-def run(command, folder, targets, media_paths, environ, cwd, placement="post"):
+def run(command, folder, targets, media_paths, environ, cwd, placement="post", telegram_format="regular"):
     targets = list(dict.fromkeys(targets))
     markdown = read_post(folder)
     media = read_media(media_paths)
@@ -302,7 +300,7 @@ def run(command, folder, targets, media_paths, environ, cwd, placement="post"):
 
     operation = OPERATIONS[command]
     path = f"/v1/{operation}"
-    body = build_body(operation, markdown, targets, credentials, media, placement)
+    body = build_body(operation, markdown, targets, credentials, media, placement, telegram_format)
     gateway = media_gateway(lookup) if media else None
     # A fresh key per call: this script never replays or resumes a run.
     headers = (

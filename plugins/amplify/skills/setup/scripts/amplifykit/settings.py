@@ -1,5 +1,6 @@
 """Where a variable's value comes from: the environment, then the nearest
-.amplify/.config, then the secret command."""
+.smmtp/.env.local, then the secret command the operator configured. No store
+is ever queried without that command."""
 
 from __future__ import annotations
 
@@ -11,7 +12,9 @@ from pathlib import Path
 
 from .errors import Fault
 
-CONFIG_PATH = Path(".amplify", ".config")
+CONFIG_PATH = Path(".smmtp", ".env.local")
+# Read where a project still has it, never offered or written.
+LEGACY_CONFIG_PATH = Path(".amplify", ".config")
 URL_VARIABLE = "AMPLIFY_REST_URL"
 TOKEN_VARIABLE = "AMPLIFY_REST_TOKEN"
 GATEWAY_URL_VARIABLE = "AMPLIFY_MEDIA_GATEWAY_URL"
@@ -43,9 +46,10 @@ def https_origin_problem(value):
 
 def find_config(start):
     for directory in (start, *start.parents):
-        candidate = directory / CONFIG_PATH
-        if candidate.is_file():
-            return candidate
+        for relative in (CONFIG_PATH, LEGACY_CONFIG_PATH):
+            candidate = directory / relative
+            if candidate.is_file():
+                return candidate
     return None
 
 

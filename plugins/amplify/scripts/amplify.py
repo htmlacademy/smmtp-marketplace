@@ -20,7 +20,7 @@ from pathlib import Path
 from amplifykit.configuration import write_config
 from amplifykit.doctor import doctor, problems
 from amplifykit.errors import Fault
-from amplifykit.platforms import PLACEMENTS
+from amplifykit.platforms import PLACEMENTS, TELEGRAM_FORMATS
 from amplifykit.publication import TARGET_STATES, run
 
 HELP = """\
@@ -33,18 +33,27 @@ post:
   first image or video. A platform without native reels posts the video as an
   ordinary post and reports it in changes; one without stories blocks.
 
+  --telegram-format rich sends the post to Telegram as a Rich Message, which
+  keeps headings, tables, nested and task lists, quotes, code, highlight and
+  spoilers; the text may run to 32768 characters instead of 4096 (1024 with
+  media), and up to 50 images, videos and GIFs go into the same message. HTML,
+  Markdown images and math stay literal text. Posts only: a reel or story
+  with it is blocked. Other platforms ignore it.
+
 variables:
-  Each variable below is read from the environment first, then from
-  .amplify/.config in the nearest directory at or above the working one that
-  has it, then through AMPLIFY_REST_SECRET_COMMAND. The file holds NAME=value
-  lines; blank lines and lines starting with # are skipped, a # after a value
-  is part of the value, one pair of quotes around a value is dropped, and an
-  empty value counts as unset. "amplify.py config" writes it. preview and
-  publish in a directory with no such file above it and no AMPLIFY_REST_URL
-  stop before any request with error code setup_required.
+  Each variable below is read from the environment first, then from the
+  nearest .smmtp/.env.local at or above the working directory, where
+  ~/.smmtp/.env.local serves every project under the home directory without
+  its own, then through AMPLIFY_REST_SECRET_COMMAND when it is set; without it
+  no secret store, the keychain included, is opened. The file holds NAME=value
+  lines: blank lines and lines starting with # are skipped, a # after a value
+  is part of it, one pair of quotes around a value is dropped, and an empty
+  value counts as unset. "amplify.py config" writes it. preview and publish
+  with no such file and no AMPLIFY_REST_URL stop with error code
+  setup_required before any request.
 
   AMPLIFY_REST_URL     service URL, https
-  AMPLIFY_REST_TOKEN   service token
+  AMPLIFY_REST_TOKEN   service bearer token
   <STRATEGY>_<FIELD>   credentials of each strategy, for example
                        TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID;
                        preview names the ones that are missing. Where a
@@ -58,22 +67,24 @@ variables:
                        that has media when both are set. Without them the
                        service leaves the media out and says so
   AMPLIFY_REST_SECRET_COMMAND
-                       command that prints the value of one variable above;
-                       {name} is replaced with the variable's name. It runs
+                       command that prints the value of one variable above,
+                       {name} replaced with the variable's name. It runs
                        without a shell for every variable neither the
-                       environment nor the file sets, so a secret kept in a
-                       store reaches this script and nothing else. A non-zero
-                       exit means the variable is not set. Example:
+                       environment nor the file sets; a non-zero exit means
+                       the variable is not set. macOS keychain, one generic
+                       password per variable, its service named after the
+                       variable:
                        security find-generic-password -s {name} -w
   SSL_CERT_FILE        certificate bundle to trust, from the environment or
                        the file; see troubleshooting
 
 output:
-  One JSON object on stdout. "ok" is true when every destination is ready with
-  its credentials present (preview) or published (publish); doctor --help
-  describes its own report. "destinations" holds one entry per strategy. A
-  failure that stops the command, including a refusal by the service, is
-  {"ok": false, "error": {"code": ..., "message": ...}}. Whenever "ok" is
+  One JSON object on stdout. For preview and publish, "ok" is true when every
+  destination is ready with its credentials (preview) or published (publish),
+  and "destinations" holds one entry per platform; doctor and config describe
+  their reports in their own --help. A failure that stops a command, a
+  refusal by the service included, is {"ok": false, "error": {"code": ...,
+  "message": ...}}, the message naming what to do next. Whenever "ok" is
   false, stderr carries one line saying why.
 
 exit status:
@@ -91,13 +102,15 @@ examples:
       --media content/2026-09-24-release/cover.png
   amplify.py preview --post content/2026-09-24-release --to instagram \\
       --placement reel --media content/2026-09-24-release/clip.mp4
+  amplify.py preview --post content/2026-10-22-guide --to telegram \\
+      --telegram-format rich
 
 troubleshooting:
   CERTIFICATE_VERIFY_FAILED on the first call is this machine's trust store,
   not a broken certificate on the service: a relocatable Python looks for
   certificates inside its own directory and ships none. Add SSL_CERT_FILE with
   a bundle the machine already has, /etc/ssl/cert.pem on macOS, to
-  .amplify/.config and run again. Certificate verification is never disabled,
+  .smmtp/.env.local and run again. Certificate verification is never disabled,
   here or anywhere else.
 
 Run "amplify.py <command> --help" for the fields of a command.
@@ -126,8 +139,8 @@ output, per destination:
                   code, file when it is about an attached file, and details
   missing         credential variables that are not set
   errors          service codes with retry, file as in pending_checks, and
-                  details; retry is null for a blocking change, which comes
-                  beside the error naming it
+                  details. A blocked platform lists the outcome's error and
+                  the change that blocks it, whose retry is null
   warnings        service codes with details
 """
 
@@ -146,7 +159,6 @@ output, per destination:
                   script does not continue it
   url             link to the published post; null when the service could not
                   get one, and the post is published all the same
-  next_check_at   when a pending post was due its next check
   changes, media  as in preview
   errors, warnings
                   as in preview
@@ -168,33 +180,37 @@ output:
   ok              the service answers with the token, and every --to platform
                   has its variables and is verified
   next            the first setup stage not done: service, media_gateway
-                  (only when partial or invalid) or platforms, the last also
-                  while no platform is complete; null when all are done
-  config          path of the file read, or null; git_ignored and git_tracked,
-                  each true, false, or null outside a git repository
+                  (only when partial or invalid), platforms, the last also
+                  while no platform is complete, or verify while
+                  strategies.unverified is not empty; null when all are done
+  config          path of the file read, or null
   secret_command  where AMPLIFY_REST_SECRET_COMMAND is set: environment,
-                  config, or null
+                  config, or null, in which case no store is read
   service         url, variables with their sources, readiness (ready or
                   busy), or error when it could not be reached
   media_gateway   url, variables, state: complete, partial, invalid (a URL
                   that is not an https root, which the service would ignore)
                   or none; images and videos reach the platforms only when
                   complete
-  strategies      null when the service did not answer; otherwise available
-                  (every platform ID) and configured: each platform with a
-                  complete credential form for any placement, and each named
-                  with --to, in the form --placement needs, whether or not it
-                  is complete; each with variables, the
-                  required ones missing, the ones whose value the platform's
-                  schema rejects (invalid) and, with --to, verify: state
-                  (verified, blocked, failed or cancelled), identity of the
-                  account, and errors with code and retry. unknown lists --to
-                  values that are not platform IDs; error is a verify call
-                  that failed as a whole
+  strategies      null when the service did not answer; otherwise:
+    available     every platform ID the service offers
+    configured    each platform with a complete credential form for any
+                  placement, and each named with --to in the form --placement
+                  needs: variables with their sources, missing (required and
+                  unset), invalid (rejected by the platform's schema) and,
+                  with --to, verify: state (verified, blocked, failed or
+                  cancelled), identity of the account, and errors with code,
+                  retry and details, details.reason naming why a destination
+                  refused
+    unverified    configured platforms with valid values this run did not
+                  check with their provider; doctor --to <platform> checks
+                  their tokens without posting
+    unknown       --to values that are not platform IDs
+    error         a verify call that failed as a whole
 """
 
 CONFIG_HELP = """\
-Write NAME=value lines into DIR/.amplify/.config, readable by its owner only.
+Write NAME=value lines into DIR/.smmtp/.env.local, readable by its owner only.
 A new file starts as the annotated template that ships with this script: every
 name present, empty but for public defaults such as BLUESKY_HOST. A value
 goes on the line that sets its name, else on its commented-out example, else
@@ -218,26 +234,20 @@ the whole command:
                                               the settings as written, the
                                               value is written unchecked
 
-DIR/.amplify/.config.local is the example that may be committed. It starts as
-the same template and gains the value of each *_URL name and of
+DIR/.smmtp/.env.example is the example to share, without secrets. It starts
+as the same template and gains the value of each *_URL name and of
 AMPLIFY_REST_SECRET_COMMAND on an empty line; a line holding a value is never
-changed. In a git repository that does not ignore .amplify/.config, the line
-.amplify/.config is added to DIR/.gitignore.
+changed.
 
 output:
   dry_run       true when nothing was written
   config        path of the file
   created       true when the file did not exist
-  template      path of the example
+  example       path of the example
   changes       per name: action (fill an empty line, replace a value, add a
                 line), secret, and value, null for a secret
   checked       platform names checked against the service's schema
   unchecked     platform names written without that check
-  gitignore     path of the .gitignore and whether the line is added; null
-                outside a repository
-  git_ignored   whether git ignores the file, after the write
-  git_tracked   whether git already tracks the file: its secrets are then in
-                the history, and ignoring it does not remove them
   error         with code config_value_invalid, invalid lists the names
                 refused
 """
@@ -271,17 +281,17 @@ def build_parser():
     )
     add_placement(check, "placement whose credential form is checked")
     write = commands.add_parser(
-        "config", help="write values into .amplify/.config", description=CONFIG_HELP,
+        "config", help="write values into .smmtp/.env.local", description=CONFIG_HELP,
         formatter_class=formatter,
     )
     write.add_argument(
         "--root", required=True, metavar="DIR",
-        help="directory to hold .amplify/: the project root, or ~ for every project",
+        help="directory to hold .smmtp/: the project root, or ~ for every project",
     )
     write.add_argument(
         "--set", action="append", default=[], metavar="NAME=VALUE",
-        help="value to write; repeat for each; without one, only the missing file, example and"
-        " .gitignore line are written",
+        help="value to write; repeat for each; without one, only the missing file and example"
+        " are written",
     )
     write.add_argument(
         "--dry-run", action="store_true",
@@ -312,6 +322,13 @@ def build_parser():
             help="image or video to attach; repeat for each file, in order; none by default",
         )
         add_placement(command, "publication form")
+        command.add_argument(
+            "--telegram-format",
+            choices=TELEGRAM_FORMATS,
+            default="regular",
+            help="rich sends Telegram a Rich Message, see the post section of 'amplify.py --help';"
+            " regular by default",
+        )
     return parser
 
 
@@ -356,7 +373,7 @@ def main(argv=None, environ=None, cwd=None):
         else:
             envelope = run(
                 arguments.command, arguments.post, arguments.to, arguments.media, environ, cwd,
-                arguments.placement,
+                arguments.placement, arguments.telegram_format,
             )
     except Fault as fault:
         envelope = {"ok": False, "error": fault.as_object()}

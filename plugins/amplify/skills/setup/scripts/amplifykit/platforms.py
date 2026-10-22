@@ -11,6 +11,7 @@ from . import transport
 CONTRACT_VERSION = "amplify-semantic/1"
 CONTENT_FORMAT = "amplify-markdown/1"
 PLACEMENTS = ("post", "reel", "story")
+TELEGRAM_FORMATS = ("regular", "rich")
 # The service accepts a credential form holding one of these fields only for
 # that placement, and blocks it for any other.
 PLACEMENT_FIELDS = {"story": "businessConnectionId"}
@@ -28,6 +29,18 @@ def credential_forms(schema):
     order."""
     forms = schema.get("anyOf") or [schema]
     return [form for form in forms if HOST_FORM_FIELD not in form.get("properties", {})]
+
+
+def field_schema(schema, field):
+    """The schema a field's value must meet: forms that share a field may
+    constrain it differently, and a value any of them accepts is valid."""
+    definitions = [
+        definition if isinstance(definition, dict) else {}
+        for form in credential_forms(schema)
+        for name, definition in form.get("properties", {}).items()
+        if name == field
+    ]
+    return definitions[0] if len(definitions) == 1 else {"anyOf": definitions}
 
 
 def serves(form, placement):
@@ -92,7 +105,7 @@ def schema_problem(value, schema):
     says nothing this can check."""
     if isinstance(schema.get("anyOf"), list):
         found = [schema_problem(value, option) for option in schema["anyOf"] if isinstance(option, dict)]
-        return None if not found or None in found else found[0]
+        return None if not found or None in found else " and ".join(dict.fromkeys(found))
     if "const" in schema and value != str(schema["const"]):
         return f"must be {schema['const']}"
     kinds = schema.get("type", [])
@@ -120,10 +133,10 @@ def credential_fields(schemas):
     """Every platform variable the service knows: name -> (strategy, field schema)."""
     try:
         return {
-            environment_name(strategy, field): (strategy, definition if isinstance(definition, dict) else {})
+            environment_name(strategy, field): (strategy, field_schema(schema, field))
             for strategy, schema in schemas.items()
             for form in credential_forms(schema)
-            for field, definition in form.get("properties", {}).items()
+            for field in form.get("properties", {})
         }
     except (AttributeError, TypeError):
         raise transport.unexpected_shape("GET", "/v1/capabilities")
@@ -139,9 +152,18 @@ def platform_problem(name, value, fields):
     return f"{name} {problem} for {fields[name][0]}" if problem else None
 
 
-def build_body(operation, markdown, targets, credentials, media, placement="post"):
+def build_body(operation, markdown, targets, credentials, media, placement="post", telegram_format="regular"):
     destinations = [
-        {"id": strategy, "strategy": strategy, "options": {}} for strategy in targets
+        {
+            "id": strategy,
+            "strategy": strategy,
+            "options": (
+                {"messageFormat": telegram_format}
+                if strategy == "telegram" and telegram_format != "regular"
+                else {}
+            ),
+        }
+        for strategy in targets
     ]
     body = {
         "input": {
