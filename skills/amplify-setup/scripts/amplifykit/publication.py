@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
+from collections import Counter
 from pathlib import Path
 
 from . import settings, transport
@@ -29,6 +31,7 @@ MEDIA_KINDS = {
 MEDIA_MAXIMUM_BYTES = 512 * 1024 * 1024
 MEDIA_MAXIMUM_COUNT = 64
 CHUNK_BYTES = 1024 * 1024
+MEDIA_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 UNREPORTED_CHANGES = {"blocked", "textual_fallback", "unwrapped"}
 OPERATIONS = {"preview": "analyze", "publish": "publish"}
 TARGET_STATES = {"preview": "ready", "publish": "published"}
@@ -78,7 +81,13 @@ def read_media(paths):
                 f"{path} brings the media to {total} bytes, over the service's"
                 f" {MEDIA_MAXIMUM_BYTES}; attach a smaller or shorter file, nothing was sent",
             )
-        media.append({"id": f"media-{index}", "kind": kind, "path": path, "size": size})
+        part = f"media-{index}"
+        media.append({"id": part, "part": part, "kind": kind, "path": path, "size": size})
+    names = Counter(Path(item["path"]).name for item in media)
+    for item in media:
+        name = Path(item["path"]).name
+        if names[name] == 1 and MEDIA_ID.fullmatch(name):
+            item["id"] = name
     return media
 
 
@@ -133,7 +142,7 @@ def encode(body, media, gateway):
         return transport.json_payload(body)
     manifest = {
         **body,
-        "sources": [{"mediaId": item["id"], "partId": item["id"]} for item in media],
+        "sources": [{"mediaId": item["id"], "partId": item["part"]} for item in media],
     }
     if gateway:
         manifest["mediaIngress"] = gateway
@@ -148,7 +157,7 @@ def encode(body, media, gateway):
             {
                 "Content-Disposition": 'form-data; name="media"',
                 "Content-Type": "application/octet-stream",
-                "Content-ID": f"<{item['id']}>",
+                "Content-ID": f"<{item['part']}>",
             },
             item,
         )
@@ -198,9 +207,9 @@ def summarise(command, result, media):
 
         if command == "preview":
             projection = outcome.get("projection", {})
-            measurement = outcome.get("measurement") or projection.get("measurement")
-            if measurement:
-                entry["measurement"] = measurement
+            measurements = outcome.get("measurements", projection.get("measurements"))
+            if measurements is not None:
+                entry["measurements"] = measurements
             if "body" in projection:
                 entry["projection"] = projection["body"]
             if outcome.get("pendingChecks"):

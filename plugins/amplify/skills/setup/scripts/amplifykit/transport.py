@@ -24,6 +24,19 @@ NOT_STARTED = {
     "REQUEST_RECEIVE_TIMEOUT",
 }
 STARTED = {"RESULT_TOO_LARGE"}
+TOKEN_ADMISSION = {
+    "TOKEN_STRATEGY_DENIED": f"the service token may not use one of these platforms; whoever issued {TOKEN_VARIABLE} allows it, or the platform is left out",
+    "TOKEN_PROFILE_LIMIT_EXCEEDED": f"the service token allows fewer destinations of one platform; whoever issued {TOKEN_VARIABLE} raises its limit",
+    "TOKEN_FEATURE_DENIED": f"the service token may not use this operation; whoever issued {TOKEN_VARIABLE} allows it",
+    "TOKEN_MEDIA_FILE_TOO_LARGE": f"a file is over the service token's limit for one file; attach a smaller or shorter one, or whoever issued {TOKEN_VARIABLE} raises the limit",
+    "TOKEN_MEDIA_REQUEST_TOO_LARGE": f"the files are over the service token's limit for one request; attach fewer or smaller files, or whoever issued {TOKEN_VARIABLE} raises the limit",
+}
+TOKEN_RUNNING = {
+    "TOKEN_DAILY_QUOTA_EXCEEDED": "the service token's daily publication quota is spent",
+    "TOKEN_MONTHLY_QUOTA_EXCEEDED": "the service token's monthly publication quota is spent",
+    "TOKEN_POLICY_UNAVAILABLE": "the service cannot read the token's limits right now",
+    "TOKEN_POLICY_CAPACITY_EXCEEDED": "the service cannot count the token's publications right now",
+}
 CERTIFICATE_BUNDLES = (
     "/etc/ssl/cert.pem",
     "/etc/ssl/certs/ca-certificates.crt",
@@ -100,9 +113,24 @@ def certificate_advice():
     )
 
 
-def refusal_advice(path, status, problem):
+def token_advice(code, publishing, retry_after):
+    wait = f", in {retry_after} s" if retry_after and retry_after.isdigit() else ""
+    if code in TOKEN_ADMISSION:
+        return f"; {TOKEN_ADMISSION[code]}" + ("; nothing was published" if publishing else "")
+    if publishing:
+        return (
+            f"; {TOKEN_RUNNING[code]}: platforms the service reached before that may already show"
+            f" the post, so check each platform, and publish again later{wait} only to those"
+            " without it"
+        )
+    return f"; {TOKEN_RUNNING[code]}; try again later{wait}"
+
+
+def refusal_advice(path, status, problem, retry_after=None):
     code = problem.get("code") if isinstance(problem, dict) else None
     publishing = path == PUBLISH_PATH
+    if code in TOKEN_ADMISSION or code in TOKEN_RUNNING:
+        return token_advice(code, publishing, retry_after)
     if publishing and code in NOT_STARTED:
         return "; nothing was published, so publishing again later posts it once"
     if publishing and (code in STARTED or status >= 500):
@@ -142,7 +170,7 @@ def call(url, token, method, path, payload=None, opener=OPENER, timeout=TIMEOUT_
                 f" {URL_VARIABLE} to the service's final https URL"
             )
         else:
-            message += refusal_advice(path, error.code, problem)
+            message += refusal_advice(path, error.code, problem, (error.headers or {}).get("Retry-After"))
         raise Fault("service_rejected", message, problem=problem)
     except urllib.error.URLError as error:
         reason = error.reason

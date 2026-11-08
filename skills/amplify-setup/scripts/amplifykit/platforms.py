@@ -5,7 +5,7 @@ import re
 from . import transport
 
 CONTRACT_VERSION = "amplify-semantic/1"
-CONTENT_FORMAT = "amplify-markdown/1"
+CONTENT_FORMAT = "gsx/1"
 PLACEMENTS = ("post", "reel", "story")
 TELEGRAM_FORMATS = ("regular", "rich")
 PLACEMENT_FIELDS = {"story": "businessConnectionId"}

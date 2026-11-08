@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 
 from amplifykit.configuration import write_config
+from amplifykit.discovery import discover
 from amplifykit.doctor import doctor, problems
 from amplifykit.errors import Fault
 from amplifykit.platforms import PLACEMENTS, TELEGRAM_FORMATS
@@ -22,17 +23,28 @@ HELP = """\
 post:
   A folder holding index.md. The Markdown in index.md is the post. Images and
   videos are attached with --media, in the order given: JPEG, PNG, WebP, GIF,
-  MP4, M4V, MOV or WebM, at most 512 MiB together. An image written into the
-  Markdown is published as its literal text. --placement makes it a post (the
-  default), a reel, which takes the first video, or a story, which takes the
-  first image or video. A platform without native reels posts the video as an
-  ordinary post and reports it in changes; one without stories blocks.
+  MP4, M4V, MOV or WebM, at most 512 MiB together. A line of its own, set off
+  by blank lines from the text around it, places attached files in the text:
+  ::media{id="cover.png"} places one, ::media{ids="a.png,b.png"
+  layout="collage"} or layout="slideshow" places several as one group. A file
+  is named by its file name when the name runs to 128 characters of Latin
+  letters, digits and . _ : -, starts with a letter or digit, and no other
+  attached file shares it; a file named otherwise cannot be placed. Telegram
+  with --telegram-format rich and Discord keep the places and put the files
+  the text does not place before it; elsewhere the files go out as ordinary
+  attachments and changes says so. An image in Markdown image syntax is
+  published as its literal text. --placement makes it a post (the default), a
+  reel, which takes the first video, or a story, which takes the first image
+  or video. A platform without native reels posts the video as an ordinary
+  post and reports it in changes; one without stories blocks.
 
   --telegram-format rich sends the post to Telegram as a Rich Message, which
   keeps headings, tables, nested and task lists, quotes, code, highlight and
   spoilers; the text may run to 32768 characters instead of 4096 (1024 with
-  media), and up to 50 images, videos and GIFs go into the same message. HTML,
-  Markdown images and math stay literal text. Posts only: a reel or story
+  media), and up to 50 images, videos and GIFs go into the same message, at
+  the places ::media gives them; a collage takes images and videos, a
+  slideshow images only, and any other group is split into single files.
+  HTML, Markdown images and math stay literal text. Posts only: a reel or story
   with it is blocked. Other platforms ignore it.
 
 variables:
@@ -49,10 +61,10 @@ variables:
 
   AMPLIFY_REST_URL     service URL, https
   AMPLIFY_REST_TOKEN   service bearer token
-  <STRATEGY>_<FIELD>   credentials of each strategy, for example
+  <STRATEGY>_<FIELD>   each platform's credentials, for example
                        TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID;
                        preview names the ones that are missing. Where a
-                       strategy takes another credential form for stories,
+                       platform takes another credential form for stories,
                        such as TELEGRAM_BUSINESS_CONNECTION_ID instead of
                        TELEGRAM_CHAT_ID, both may be set and --placement
                        picks the form
@@ -76,22 +88,23 @@ variables:
 output:
   One JSON object on stdout. For preview and publish, "ok" is true when every
   destination is ready with its credentials (preview) or published (publish),
-  and "destinations" holds one entry per platform; doctor and config describe
-  their reports in their own --help. A failure that stops a command, a
+  and "destinations" holds one entry per platform; doctor, discover and config
+  describe their reports in their own --help. A failure that stops a command, a
   refusal by the service included, is {"ok": false, "error": {"code": ...,
   "message": ...}}, the message naming what to do next. Whenever "ok" is
-  false, stderr carries one line saying why.
+  false, stderr carries one line naming what failed.
 
 exit status:
   0  "ok" is true
-  1  "ok" is false: a command failed, or preview or publish left a
-     destination short of its target state
+  1  "ok" is false: a command failed, preview or publish left a
+     destination short of its target state, or a lookup did not complete
   2  invalid command line
   3  doctor ran and found the setup incomplete; its report says where
 
 examples:
   amplify.py config --root . --set AMPLIFY_REST_URL=https://service.example
   amplify.py doctor --to telegram
+  amplify.py discover --to telegram --address https://t.me/channelname
   amplify.py preview --post content/2026-09-24-release --to telegram --to bluesky
   amplify.py publish --post content/2026-09-24-release --to telegram \\
       --media content/2026-09-24-release/cover.png
@@ -116,8 +129,10 @@ Show how the post lands on each platform without publishing anything.
 
 output, per destination:
   state           ready or blocked
-  measurement     the post's length in the platform's unit against its
-                  maximum, after any cut
+  measurements    a list of field, unit, value and maximum after fitting;
+                  maximum null means unknown. Optional block and item
+                  identify a block or selected media item. Preserve each
+                  field and unit: a platform can measure several
   projection      the post as the platform receives it: the Markdown
                   converted to the richest formatting the platform supports,
                   in its own request format, such as Telegram's HTML text; a
@@ -125,8 +140,13 @@ output, per destination:
   changes         what the platform changes beyond formatting, as the service
                   reports it: subject, class and details. A text over the
                   limit is cut to fit and ends with an ellipsis: class
-                  approximated, details.reason text_truncated, details.value
-                  the original length against details.maximum
+                  approximated, details.reason text_truncated. Its
+                  details.truncated holds unit, value (the original length)
+                  and maximum; details.field names the affected field.
+                  Content subject.range, when present, is [start, end) in
+                  UTF-16 units of the original source. A placed file moved
+                  to attachments reports media_attached; a group the platform
+                  splits reports media_group_split
   media           what happens to each attached file: file, class and
                   details, for example class omitted with details.reason
                   gateway_not_configured
@@ -204,6 +224,32 @@ output:
     error         a verify call that failed as a whole
 """
 
+DISCOVER_HELP = """\
+Look up where a platform's secret can publish, and the values that complete
+its credentials, such as TELEGRAM_CHAT_ID for a channel. Sends only the
+secret part of the platform's credentials, which must be set; nothing is
+posted. Platforms that offer no lookup are refused with discover_unsupported,
+error.supported naming those that do. Some platforms list every destination
+the secret reaches; others cannot list and need --address, in the form the
+operator would type it, such as @name, a t.me link or a chat id for
+Telegram.
+
+output:
+  ok              the lookup completed
+  strategy        the platform looked up
+  state           read, blocked, failed or cancelled
+  mode            enumerated (listed), resolved (the --address), or
+                  address_required (nothing listed; run with --address)
+  candidates      per destination: variables, the names and values to write
+                  with "amplify.py config --set"; label and handle as the
+                  platform shows them, or null; kind; publish.state, ready
+                  (the secret may post there), blocked with code and reason,
+                  or unchecked (verify proves it once the value is written)
+  next_cursor     token for the next page, or null
+  next            what to run next, or null
+  errors          service codes with retry and details
+"""
+
 CONFIG_HELP = """\
 Write NAME=value lines into DIR/.smmtp/.env.local, readable by its owner only.
 A new file starts as the annotated template that ships with this script: every
@@ -275,6 +321,20 @@ def build_parser():
         " none by default",
     )
     add_placement(check, "placement whose credential form is checked")
+    look = commands.add_parser(
+        "discover", help="look up where a platform's secret can publish",
+        description=DISCOVER_HELP, formatter_class=formatter,
+    )
+    look.add_argument(
+        "--to", required=True, metavar="STRATEGY", help="platform ID the service offers, such as telegram"
+    )
+    where = look.add_mutually_exclusive_group()
+    where.add_argument(
+        "--address", metavar="TEXT", help="the destination as the operator names it; none by default"
+    )
+    where.add_argument(
+        "--cursor", metavar="TOKEN", help="next_cursor of the previous page; none by default"
+    )
     write = commands.add_parser(
         "config", help="write values into .smmtp/.env.local", description=CONFIG_HELP,
         formatter_class=formatter,
@@ -339,10 +399,12 @@ def add_placement(command, summary):
 def failure_line(command, envelope):
     destinations = envelope.get("destinations", [])
     if "error" in envelope:
-        error = envelope["error"]
-        text = f"{command} failed ({error['code']}): {error['message']}"
+        text = f"{command} failed ({envelope['error']['code']}); read error.message on stdout"
     elif command == "doctor":
         text = f"doctor: {'; '.join(problems(envelope))}; read the report on stdout"
+    elif command == "discover":
+        codes = ", ".join(entry["code"] for entry in envelope.get("errors", []) if entry.get("code"))
+        text = f"discover: {envelope['strategy']} {envelope['state']} ({codes or 'no code'}); read \"errors\" in the output"
     elif destinations:
         target = TARGET_STATES[command]
         short = sum(entry["state"] != target or "missing" in entry for entry in destinations)
@@ -362,6 +424,8 @@ def main(argv=None, environ=None, cwd=None):
     try:
         if arguments.command == "doctor":
             envelope = doctor(arguments.to, environ, cwd, arguments.placement)
+        elif arguments.command == "discover":
+            envelope = discover(arguments.to, arguments.address, arguments.cursor, environ, cwd)
         elif arguments.command == "config":
             envelope = write_config(arguments.root, arguments.set, arguments.dry_run, environ)
         else:
