@@ -1,7 +1,3 @@
-"""Where a variable's value comes from: the environment, then the nearest
-.smmtp/.env.local, then the secret command the operator configured. No store
-is ever queried without that command."""
-
 from __future__ import annotations
 
 import re
@@ -13,7 +9,6 @@ from pathlib import Path
 from .errors import Fault
 
 CONFIG_PATH = Path(".smmtp", ".env.local")
-# Read where a project still has it, never offered or written.
 LEGACY_CONFIG_PATH = Path(".amplify", ".config")
 URL_VARIABLE = "AMPLIFY_REST_URL"
 TOKEN_VARIABLE = "AMPLIFY_REST_TOKEN"
@@ -22,18 +17,12 @@ GATEWAY_TOKEN_VARIABLE = "AMPLIFY_MEDIA_GATEWAY_TOKEN"
 SECRET_COMMAND_VARIABLE = "AMPLIFY_REST_SECRET_COMMAND"
 CERTIFICATE_VARIABLE = "SSL_CERT_FILE"
 SECRET_PLACEHOLDER = "{name}"
-# A locked keychain asks the operator for its password in a dialog, and the
-# store answers only after that.
 SECRET_TIMEOUT_SECONDS = 120
 VARIABLE_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
-# http.client refuses a header value holding a line break or a non-Latin-1
-# character with an error that quotes the whole value, the token included.
 HEADER_SAFE = re.compile(r"[\x21-\x7e]+")
 
 
 def https_origin_problem(value):
-    """Why value is not an https origin without a path or userinfo, the form
-    the service takes for itself and for a media gateway; None when it is."""
     parts = urllib.parse.urlsplit(value)
     if parts.scheme != "https" or not parts.netloc or not HEADER_SAFE.fullmatch(value):
         return "must be an https:// URL of visible ASCII characters"
@@ -67,8 +56,6 @@ def read_config(path):
 
 
 def parse_config(text, path):
-    """Parse NAME=value lines. An error names the line by number and never
-    quotes it, since the line may hold a secret."""
     values = {}
     for number, line in enumerate(text.splitlines(), 1):
         line = line.strip()
@@ -95,9 +82,6 @@ def parse_config(text, path):
 
 
 class Lookup:
-    """A variable's value and its source: the environment, then the config
-    file, then the secret command. Each name is resolved once, so a store
-    that prompts for its password prompts once."""
 
     def __init__(self, environ, config, command):
         self.environ = environ
@@ -176,8 +160,6 @@ def read_secret(command, name):
 
 
 def load(environ, cwd):
-    """The config file in effect, its values, the variable lookup, and the
-    certificate bundle the environment or the file names."""
     path = find_config(cwd)
     config = read_config(path) if path else {}
     cafile = environ.get(CERTIFICATE_VARIABLE) or config.get(CERTIFICATE_VARIABLE)

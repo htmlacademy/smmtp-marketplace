@@ -1,6 +1,3 @@
-"""preview and publish: one Markdown post, its images and videos, and what
-each platform does with them."""
-
 from __future__ import annotations
 
 import json
@@ -29,18 +26,12 @@ MEDIA_KINDS = {
     ".mov": "video",
     ".webm": "video",
 }
-# The service's ceilings: bytes for one binary part and for all of them
-# together, and media items in one post.
 MEDIA_MAXIMUM_BYTES = 512 * 1024 * 1024
 MEDIA_MAXIMUM_COUNT = 64
 CHUNK_BYTES = 1024 * 1024
-# blocked goes to errors; the two formatting classes are what the projection
-# already shows.
 UNREPORTED_CHANGES = {"blocked", "textual_fallback", "unwrapped"}
 OPERATIONS = {"preview": "analyze", "publish": "publish"}
 TARGET_STATES = {"preview": "ready", "publish": "published"}
-# The longest the service waits for a platform that pauses while it processes
-# the post; past it that post comes back pending.
 PUBLISH_WAIT_SECONDS = 300
 
 
@@ -92,9 +83,6 @@ def read_media(paths):
 
 
 def media_gateway(lookup):
-    """The gateway the manifest carries, or None. The service treats an origin
-    outside its pattern as no gateway and drops the media without saying why,
-    so such an origin stops the command here."""
     origin, bearer = lookup(GATEWAY_URL_VARIABLE), lookup(GATEWAY_TOKEN_VARIABLE)
     if not (origin and bearer):
         return None
@@ -108,8 +96,6 @@ def media_gateway(lookup):
 
 
 class Stream:
-    """A request body of byte strings and files, read in chunks as it is sent
-    so a video never sits in memory whole; len() is its Content-Length."""
 
     def __init__(self, pieces):
         self.pieces = pieces
@@ -143,9 +129,6 @@ class Stream:
 
 
 def encode(body, media, gateway):
-    """Return the request body and its content type. The service takes media
-    bytes only as multipart: a manifest part, then one part per file. It has
-    no media gateway of its own, so the manifest carries the caller's."""
     if not media:
         return transport.json_payload(body)
     manifest = {
@@ -181,7 +164,6 @@ def encode(body, media, gateway):
 
 
 def coded(items, files):
-    """code and details of each item, and the file of one about a media item."""
     found = []
     for item in items:
         entry = {"code": item.get("code")}
@@ -215,8 +197,6 @@ def summarise(command, result, media):
             entry["errors"] = errors
 
         if command == "preview":
-            # A ready outcome carries the measurement under `projection`, a
-            # blocked one at the top level.
             projection = outcome.get("projection", {})
             measurement = outcome.get("measurement") or projection.get("measurement")
             if measurement:
@@ -302,7 +282,6 @@ def run(command, folder, targets, media_paths, environ, cwd, placement="post", t
     path = f"/v1/{operation}"
     body = build_body(operation, markdown, targets, credentials, media, placement, telegram_format)
     gateway = media_gateway(lookup) if media else None
-    # A fresh key per call: this script never replays or resumes a run.
     headers = (
         {"Idempotency-Key": secrets.token_hex(16), "Prefer": f"wait={PUBLISH_WAIT_SECONDS}"}
         if command == "publish"

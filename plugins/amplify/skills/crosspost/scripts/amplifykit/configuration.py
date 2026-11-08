@@ -1,6 +1,3 @@
-"""config: write .smmtp/.env.local and its example, checking every value
-first."""
-
 from __future__ import annotations
 
 import os
@@ -59,9 +56,6 @@ def line_name(line):
 
 
 def merge(text, values, overwrite):
-    """Put each value on the line that sets its name, or on the first
-    commented-out example of it, or on a new line at the end. Without
-    overwrite, a line that already holds a value keeps it."""
     pending = dict(values)
     lines = text.splitlines()
     for index, line in enumerate(lines):
@@ -80,8 +74,6 @@ def merge(text, values, overwrite):
 
 
 def planned_changes(text, values):
-    """The action merge() takes for each name: fill an empty or commented-out
-    line, replace a value, or add a line."""
     lines = text.splitlines()
     current = {line_name(line): line.partition("=")[2].strip() for line in lines}
     examples = {match.group(1) for match in map(COMMENTED_SETTING.match, lines) if match}
@@ -133,10 +125,6 @@ LOCAL_CHECKS = {
 
 
 def validate(values, config, environ):
-    """Refuse every value the script could not use, before anything is
-    written. Platform values are checked against the live schema when the
-    service answers with the settings as they will be; otherwise they are
-    returned as unchecked."""
     problems, invalid, checked, unchecked = [], [], [], []
     platform = {}
     for name, value in values.items():

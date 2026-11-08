@@ -1,5 +1,3 @@
-"""The failure every command reports as the "error" object of its output."""
-
 from __future__ import annotations
 
 

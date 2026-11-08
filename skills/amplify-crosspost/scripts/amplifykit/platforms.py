@@ -1,7 +1,3 @@
-"""Platform credentials: the variable each field lives in, the credential
-form a placement takes, whether a value fits the field's schema, and the
-request that carries them."""
-
 from __future__ import annotations
 
 import re
@@ -12,11 +8,7 @@ CONTRACT_VERSION = "amplify-semantic/1"
 CONTENT_FORMAT = "amplify-markdown/1"
 PLACEMENTS = ("post", "reel", "story")
 TELEGRAM_FORMATS = ("regular", "rich")
-# The service accepts a credential form holding one of these fields only for
-# that placement, and blocks it for any other.
 PLACEMENT_FIELDS = {"story": "businessConnectionId"}
-# A credential form holding this field names a connection kept on the
-# service's host, which no variable of this script supplies.
 HOST_FORM_FIELD = "authMode"
 
 
@@ -25,15 +17,11 @@ def environment_name(strategy, field):
 
 
 def credential_forms(schema):
-    """The credential forms of a strategy that variables can fill, in schema
-    order."""
     forms = schema.get("anyOf") or [schema]
     return [form for form in forms if HOST_FORM_FIELD not in form.get("properties", {})]
 
 
 def field_schema(schema, field):
-    """The schema a field's value must meet: forms that share a field may
-    constrain it differently, and a value any of them accepts is valid."""
     definitions = [
         definition if isinstance(definition, dict) else {}
         for form in credential_forms(schema)
@@ -52,15 +40,11 @@ def serves(form, placement):
 
 
 def placement_forms(schema, placement):
-    """The credential forms a strategy accepts for placement, in schema order;
-    every form when none is marked for it."""
     forms = credential_forms(schema)
     return [form for form in forms if serves(form, placement)] or forms
 
 
 def choose_form(strategy, schema, placement, lookup):
-    """The first form for placement whose required variables are all set,
-    else the first form for placement: (form, values, unset required names)."""
     chosen = None
     for form in placement_forms(schema, placement):
         values, absent = {}, []
@@ -78,8 +62,6 @@ def choose_form(strategy, schema, placement, lookup):
 
 
 def complete_form(strategy, schema, lookup):
-    """The first credential form, for any placement, whose required variables
-    are all set; None when there is none."""
     for form in credential_forms(schema):
         required = form.get("required", [])
         if all(lookup(environment_name(strategy, field)) for field in required):
@@ -100,9 +82,6 @@ def resolve_credentials(targets, schemas, lookup, placement="post"):
 
 
 def schema_problem(value, schema):
-    """What makes value fail a credential field's JSON Schema, for the
-    keywords a credential schema uses; None when it passes or the schema
-    says nothing this can check."""
     if isinstance(schema.get("anyOf"), list):
         found = [schema_problem(value, option) for option in schema["anyOf"] if isinstance(option, dict)]
         return None if not found or None in found else " and ".join(dict.fromkeys(found))
@@ -130,7 +109,6 @@ def schema_problem(value, schema):
 
 
 def credential_fields(schemas):
-    """Every platform variable the service knows: name -> (strategy, field schema)."""
     try:
         return {
             environment_name(strategy, field): (strategy, field_schema(schema, field))
@@ -172,8 +150,6 @@ def build_body(operation, markdown, targets, credentials, media, placement="post
             "destinations": destinations,
         }
     }
-    # The service rejects fields it does not expect: verify takes no content,
-    # and analyze takes no credentials.
     if operation != "verify":
         body["input"]["content"] = {
             "format": CONTENT_FORMAT,

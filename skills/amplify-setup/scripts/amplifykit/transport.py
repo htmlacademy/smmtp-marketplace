@@ -1,6 +1,3 @@
-"""Requests to the service: the bearer, TLS, and what each failure
-means for the operator."""
-
 from __future__ import annotations
 
 import http.client
@@ -14,16 +11,10 @@ import urllib.request
 from .errors import Fault
 from .settings import CERTIFICATE_VARIABLE, CONFIG_PATH, HEADER_SAFE, TOKEN_VARIABLE, URL_VARIABLE
 
-# The service lets one operation run for up to 600 s and answers when it ends
-# or pauses, so a shorter timeout abandons a publish that is still landing.
 TIMEOUT_SECONDS = 620
-# status and capabilities never reach a provider, so a slower answer is a hung
-# connection rather than work in progress.
 CHECK_TIMEOUT_SECONDS = 30
 PUBLISH_PATH = "/v1/publish"
 PUBLISH_ADVICE = "; the post may already be published, check the platform before publishing again"
-# Refusals the service gives before a publication starts, and the one it
-# gives after the platforms already ran.
 NOT_STARTED = {
     "RUN_STORE_UNAVAILABLE",
     "RUN_CAPACITY_EXCEEDED",
@@ -41,9 +32,6 @@ CERTIFICATE_BUNDLES = (
 
 
 class RefuseRedirect(urllib.request.HTTPRedirectHandler):
-    """Turn every redirect into the HTTPError it answers with: following one
-    would carry the bearer token to whatever host, over whatever scheme, the
-    Location names."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -125,11 +113,6 @@ def refusal_advice(path, status, problem):
 
 
 def call(url, token, method, path, payload=None, opener=OPENER, timeout=TIMEOUT_SECONDS, headers=None):
-    """One request, its answer parsed as JSON. After a publish request went
-    out, a lost answer, a 5xx and RESULT_TOO_LARGE leave unknown whether the
-    post landed, and say so; the refusals in NOT_STARTED say it did not.
-    payload is (data, content type); data is bytes or a sized iterable of
-    bytes."""
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json", **(headers or {})}
     data = None
     if payload is not None:
@@ -149,9 +132,6 @@ def call(url, token, method, path, payload=None, opener=OPENER, timeout=TIMEOUT_
         finally:
             error.close()
         message = f"{method} {path} answered {error.code}"
-        # The service answers a request without a valid bearer with an empty
-        # 404, before it looks at the route; only an authenticated request
-        # gets a problem body.
         if error.code == 404 and problem is None:
             message += f"; the service accepts no such token here: check {TOKEN_VARIABLE} and {URL_VARIABLE}"
         elif error.code == 404:

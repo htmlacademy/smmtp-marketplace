@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""Preview and publish a Markdown post to social platforms.
-
-Run with --help for commands, environment, output and exit status.
-Requires Python 3.9 or later and nothing outside the standard library.
-"""
 
 from __future__ import annotations
 
@@ -262,7 +257,7 @@ def build_parser():
     formatter = argparse.RawDescriptionHelpFormatter
     parser = Parser(
         prog="amplify.py",
-        description=__doc__.splitlines()[0],
+        description="Preview and publish a Markdown post to social platforms.",
         epilog=HELP,
         formatter_class=formatter,
     )
@@ -342,7 +337,6 @@ def add_placement(command, summary):
 
 
 def failure_line(command, envelope):
-    """The one stderr line a failed run adds; service-supplied text stays in the JSON."""
     destinations = envelope.get("destinations", [])
     if "error" in envelope:
         error = envelope["error"]

@@ -1,6 +1,3 @@
-"""doctor: what is set up, where each value comes from, and what to do next,
-without publishing anything."""
-
 from __future__ import annotations
 
 from . import settings, transport
@@ -52,12 +49,6 @@ def verify_entry(outcome):
 
 
 def check_strategies(targets, schemas, lookup, verify, placement="post"):
-    """Every platform named in targets, with its credential form for
-    placement, and every other platform with a complete credential form for
-    any placement: the form's variables, the required ones missing, and the
-    ones its schema rejects. verify(ready targets, credentials) returns the
-    service's outcomes for the named platforms whose values are all present
-    and valid."""
     try:
         configured = {}
         for strategy, schema in schemas.items():
@@ -170,10 +161,6 @@ def settled(entry):
 
 
 def next_stage(report):
-    """The first setup stage that is not done: service, media_gateway (partial
-    or invalid), platforms, or verify while a complete platform has not been
-    checked with its provider in this run; None when every stage the report
-    can judge is done."""
     if "error" in report["service"]:
         return "service"
     if report["media_gateway"]["state"] in ("partial", "invalid"):
@@ -188,7 +175,6 @@ def next_stage(report):
 
 
 def problems(report):
-    """What keeps "ok" false, one short phrase each."""
     service_section = report["service"]
     if "error" in service_section:
         return [f"service {service_section['error']['code']}"]
