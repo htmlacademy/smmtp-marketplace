@@ -1,21 +1,84 @@
-# Platforms
+# Platform guides
 
-How the operator gets each platform's credentials. `doctor` names the variables a platform needs from the service at run time; where this page disagrees, `doctor` is right. Menu paths drift as platforms redesign their settings: treat them as directions, not exact labels. The last column is what `doctor --to <platform>` leaves for the first post to prove. The id lookups below are the fallback for a destination value `discover` cannot find.
+How to walk the operator through connecting each kind of channel. Read only the section for the channel at hand. Give every link and menu path as written; if the operator does not find an item, ask what they see and guide from there. Values in `CAPS` are what `plan` lists in `asks`: collect each through Writing values in SKILL.md, never by naming the variable to the operator. The last line of each guide is what only the first post proves.
 
-| Platform | Variables | How to get them | Not proven by verify |
-|---|---|---|---|
-| `telegram` | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | `/newbot` in @BotFather gives the token (`4839574812:AAF…`). The chat is `@channelname` for a public channel, or the numeric `-100…` id for a private channel or group, read from `getUpdates` after the bot sees a message there. Add the bot to the channel as an administrator allowed to post. | Media rights in a group: verify checks the token, the chat, that the bot is a member and that it may post there. |
-| `telegram`, stories | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BUSINESS_CONNECTION_ID` | A story goes out as a connected business account, never as the bot. Turn on Secretary Mode for the bot in @BotFather, then connect the bot to the account in Telegram's Business settings with the right to manage stories. The id is `business_connection.id` from the `business_connection` update, read with `getUpdates` and `allowed_updates=["business_connection"]` while no webhook is set; a reconnect can issue a new one. | Nothing: verify checks the id, that the connection is enabled and that it may manage stories. |
-| `bluesky` | `BLUESKY_IDENTIFIER`, `BLUESKY_PASSWORD`, `BLUESKY_HOST` | Settings → Privacy and Security → App Passwords → Add. An app password, never the account password. The identifier is the handle (`me.bsky.social`) or the email; the host is `bsky.social` unless the account lives on another server, and then it is the server holding the account. | Nothing beyond a login. |
-| `mastodon` | `MASTODON_ACCESS_TOKEN`, `MASTODON_HOST` | Preferences → Development → New application, scopes `profile` (or `read:accounts`), which verify needs to read the account, and `write:statuses`, plus `write:media` for images and video, then copy "Your access token". The host is bare, `mastodon.social`, optionally with a port, no scheme or path. | A token without `write:media` verifies and then fails on the first media upload. |
-| `slack` | `SLACK_ACCESS_TOKEN`, `SLACK_CHANNEL` | Create a Slack app, add the bot scopes `chat:write`, plus `files:write` for media and `files:read` for the link to a message with files, install it to the workspace and copy the `xoxb-` Bot User OAuth Token. The channel is an id (`C1234567890`), better than `#general`. Invite the bot with `/invite @bot`. | Whether the bot is in the channel. Without `files:read` a message with files publishes without a link. |
-| `discord` | `DISCORD_WEBHOOK_ID`, `DISCORD_WEBHOOK_TOKEN` | Channel settings → Integrations → Webhooks → New webhook, copy its URL and split `/api/webhooks/{id}/{token}`. Both parts are secret. | Nothing beyond the webhook. |
-| `twitter` | `TWITTER_ACCESS_TOKEN` | An X developer app with Read and Write, then the OAuth 2.0 authorization-code flow with `tweet.read tweet.write users.read media.write`. It has to be a user token: an app-only token cannot post. | Nothing beyond the user. |
-| `vk` | `VK_ACCESS_TOKEN`, `VK_OWNER_ID` | A community the operator administers and a Standalone VK ID app. The token is a user token of that administrator with `wall` and `photos`, plus `video` for videos, since a community token cannot post wall photos; a new app gets these rights only after VK approves them on request to `devsupport@corp.vk.com`, and listing them in the scope is not enough. The token does not renew itself and is reissued through VK ID. The owner is `-123456` for a community, where the administrator needs the top admin level, or a positive user id. | Fails without `photos` even for text-only posts. Video rights. Stories need a community token with the stories right instead (community → Manage → Additional → API usage → Access tokens), and one config holds one VK token. |
-| `facebook` | `FACEBOOK_PAGE_ID`, `FACEBOOK_ACCESS_TOKEN` | Pages only. A Meta app with the "Manage everything on your Page" use case, not Facebook Login, and `pages_show_list pages_read_engagement pages_manage_posts`. In the Graph API Explorer generate a User Token with those permissions; for about 60 days exchange it through `oauth/access_token` with `fb_exchange_token`. `GET /me/accounts` then gives the page `id` and its page `access_token`, not the user token. Another person's page needs App Review, Business Verification and Advanced Access. | Publishing rights: verify reads only the page's id and name. |
-| `instagram` | `INSTAGRAM_USER_ID`, `INSTAGRAM_ACCESS_TOKEN` | A Business or Creator account linked to a Facebook Page through Facebook Login, not Instagram Login, and a Meta app with the Instagram product and `instagram_basic instagram_content_publish pages_read_engagement`; Business Manager roles can also need `ads_management` or `ads_read`. Publishing needs App Review for `instagram_content_publish` and Business Verification. | Every post needs an image or video. Stories are confirmed for Business accounts only. |
-| `threads` | `THREADS_USER_ID`, `THREADS_ACCESS_TOKEN` | A Meta app with the Threads API use case and `threads_basic threads_content_publish`. The account must be public and is added as a Threads Tester (the Administrator role does not open the generator), then accepts the invite in Threads → Settings → Account → Website permissions. The long-lived token (about 60 days) comes from the User Token Generator; the user id from `GET me?fields=id,username` on `graph.threads.net`. Another person's account needs App Review and Tech Provider Verification. | The right to publish: verify reads only the id and username. The token expires in about 60 days. |
-| `linkedin` | `LINKEDIN_ACCESS_TOKEN`, `LINKEDIN_AUTHOR_ID` | A LinkedIn app with a verified associated Page, "Share on LinkedIn" and "Sign In with LinkedIn using OpenID Connect", a token from OAuth 2.0 Tools with `w_member_social` to publish and `openid profile` for verify (about 60 days). The author is `urn:li:person:{sub}`, with `sub` from `GET /v2/userinfo`, or `urn:li:organization:{id}`, which also needs `w_organization_social`, the ADMINISTRATOR, DIRECT_SPONSORED_CONTENT_POSTER or content administrator role, the Community Management API, and `r_organization_admin` or `rw_organization_admin` for verify to read the role. | The token expires in about 60 days. A Page token without `r_organization_admin` can publish but fails verify with `acl_scope_missing`. |
-| `max` | `MAX_BOT_TOKEN`, `MAX_CHAT_ID` | Create the bot in MAX for business (`business.max.ru`): Chatbots → the bot → its settings, copy the token. A bot created in the MAX for business mini-app gets its token there or from the MAX for business bot's Get token command. The chat id comes from an update (`bot_added`, `bot_started`, or `message.recipient.chat_id`), and the bot must be a member; in a channel, the owner or an administrator with `write`. | Nothing: verify checks the chat, membership and, in a channel, `write`. The MAX API presents a certificate from the Russian Ministry's CA, which the service's host has to trust, so `PROVIDER_UNAVAILABLE` here goes to mail@smmtp.ru. |
-| `youtube` | `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN` | A Google Cloud project with YouTube Data API v3 enabled, an OAuth consent screen and a Desktop app OAuth client, which gives the client id and secret. The channel owner authorizes `https://www.googleapis.com/auth/youtube.upload` and `https://www.googleapis.com/auth/youtube.readonly` and the flow returns an offline refresh token. While the consent screen is in Testing, the refresh token usually expires after seven days. | Visibility: a project created after 2020-07-28 and not yet audited by Google uploads private videos only. The daily upload quota. Every post needs a video. |
-| `tiktok` | `TIKTOK_BUSINESS_ID`, `TIKTOK_ACCESS_TOKEN` | A Business or Personal account. Fill in TikTok's Accounts API access application, then in the TikTok API for Business portal create an app requesting TikTok Accounts with Video Publish, Photo Publish, Account User and Get Account Media. Set a public HTTPS redirect URL ending in `/` and an app logo, and send the account holder authorization URL (My Apps → App Detail → Basic Information) to the account owner. The redirect returns a one-use `auth_code`, valid ten minutes; `POST /tt_user/oauth2/token/` exchanges it: `open_id` is the business id, `access_token` the token. The media gateway's file host must be verified as a URL property of the app; mail@smmtp.ru arranges it. | Video Publish: verify reads only the account's settings. The token expires after one day. The URL property is proved by the first post. Every post needs a video or images, and a video post is public. |
+## Telegram channel or group
+
+Publishing goes through a bot the operator creates; it posts in the channel's name.
+
+1. Create the bot: open https://t.me/BotFather in Telegram, press Start, send `/newbot`, choose a display name, then a username ending in `bot`. BotFather answers with a long line like `123456789:AAH…`: the bot's key, `TELEGRAM_BOT_TOKEN`.
+2. Make it an administrator of the channel: open the channel → its name at the top → Edit (pencil) → Administrators → Add Admin → search the bot's username → keep "Post Messages" on → Save. In a group, adding the bot as a member allowed to send messages is enough.
+3. `connect --to telegram --link <their channel link>`. A private channel's invite link works once step 2 is done.
+
+On `chat_not_found`, a private channel needs its invite link.
+
+First post proves: media rights in a group.
+
+## Telegram stories
+
+Stories go out as the operator's Telegram Business account through the same bot. Telegram Business needs Telegram Premium.
+
+1. The bot from the Telegram guide, connected first.
+2. In @BotFather: `/mybots` → the bot → Bot Settings → Business Mode → Turn on.
+3. In Telegram: Settings → Telegram Business → Chatbots → enter the bot's username → allow it to manage stories.
+4. The bot's key again, `TELEGRAM_BOT_TOKEN`: @BotFather → `/mybots` → the bot → API Token.
+5. `connect --to telegram --placement story`.
+
+First post proves: nothing.
+
+## VK community or personal page
+
+1. The operator must be the community's owner or administrator (the top admin level).
+2. `connect --to vk --link <their page link>`; they open the link it gives, sign in to VK with that account and allow access.
+
+First post proves: rights to upload video.
+
+## VK stories
+
+1. In the community: Manage → API usage → Access tokens → Create token → tick Stories → Create, confirm, and copy the key: `VK_ACCESS_TOKEN`.
+2. `connect --to vk --placement story --link <community link>`. The link has to name the community by number, `vk.com/club123`; if theirs is a custom name, ask for the number shown in the community's settings.
+
+First post proves: nothing.
+
+## Discord channel
+
+1. They need the Manage Webhooks permission on the server.
+2. Channel → Edit Channel (gear) → Integrations → Webhooks → New Webhook → choose the channel → Copy Webhook URL. The whole link is `DISCORD_WEBHOOK_URL`; it is a secret.
+3. `connect --to discord`.
+
+First post proves: nothing.
+
+## Mastodon account
+
+1. Their profile link, such as `https://mastodon.social/@name`.
+2. Open `https://<server>/settings/applications/new`, name the application, tick `read:accounts`, `write:statuses` and `write:media`, Submit, open the application and copy "Your access token": `MASTODON_ACCESS_TOKEN`.
+3. `connect --to mastodon --link <profile link>`.
+
+First post proves: that media upload works.
+
+## Bluesky account
+
+1. Their profile link, such as `https://bsky.app/profile/name.bsky.social`.
+2. In Bluesky: Settings → Privacy and security → App passwords → Add App Password → name it → copy the password of the form `xxxx-xxxx-xxxx-xxxx`: `BLUESKY_PASSWORD`. Never their account password.
+3. `connect --to bluesky --link <profile link>`. An account hosted on another server than bsky.social also needs that server in `BLUESKY_HOST`.
+
+First post proves: nothing.
+
+## MAX channel or chat
+
+1. Create the bot in MAX for business, https://business.max.ru → Chatbots → the bot → settings, and copy its token: `MAX_BOT_TOKEN`.
+2. Add the bot to the channel; in a channel it needs the owner's or an administrator's right to write.
+3. `connect --to max --link <chat id>`: MAX takes the chat's numeric id.
+
+First post proves: nothing. A refusal from MAX's side goes to mail@smmtp.ru.
+
+## Sign-in platforms
+
+X, LinkedIn, Facebook pages, Instagram, Threads, YouTube and Slack connect by signing in; nothing is typed. `connect --to <platform> --link <their link>`; they open the link it gives, sign in with the account that publishes and allow access.
+
+- **LinkedIn**: a company page link (`/company/…`) connects the page and needs them to be its administrator; a profile link (`/in/…`) connects them personally.
+- **Instagram**: a Business or Creator account. Every post needs an image or video.
+- **Facebook**: a page they manage with the right to create content.
+- **Threads**: a public account.
+- **YouTube**: the Google account that owns the channel. Every post needs a video; visibility and the daily upload quota show only on the first upload.
+- **Slack**: after signing in, they invite the app's bot to the channel with `/invite`.

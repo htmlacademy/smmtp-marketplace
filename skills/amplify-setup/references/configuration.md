@@ -19,4 +19,4 @@ macOS asks the operator to allow access the first time the script reads the keyc
 ## Per host
 
 - **Codex** runs commands in the `workspace-write` sandbox with the network off. Set `network_access = true` under `[sandbox_workspace_write]` in `~/.codex/config.toml`, or approve the command when Codex asks to run it outside the sandbox.
-- **Claude Cowork** reads the file from the folder the session works in. Its network goes through an allowlist, so the host of `AMPLIFY_REST_URL` has to be allowed in Cowork's network settings. There is no keychain inside Cowork, so a secret there sits in the file.
+- **Claude Cowork** reads the file from the folder the session works in. Its network goes through an allowlist, so the host of `AMPLIFY_REST_URL`, and `api.telegram.org` for Telegram, have to be allowed in Cowork's network settings. There is no keychain inside Cowork, so a secret there sits in the file.

@@ -5,17 +5,21 @@ import re
 import tempfile
 from pathlib import Path
 
-from . import settings, transport
+from . import links, settings, transport
 from .errors import Fault
-from .platforms import credential_fields, platform_problem
+from .platforms import connection_fields, platform_problem
 from .settings import (
+    APP_TOKEN_VARIABLE,
     CERTIFICATE_VARIABLE,
+    CHANNEL_ID,
+    CHANNEL_PREFIX,
     CONFIG_PATH,
     GATEWAY_TOKEN_VARIABLE,
     GATEWAY_URL_VARIABLE,
     HEADER_SAFE,
     SECRET_COMMAND_VARIABLE,
     SECRET_PLACEHOLDER,
+    SERVICE_TOKEN,
     TOKEN_VARIABLE,
     URL_VARIABLE,
     VARIABLE_NAME,
@@ -47,7 +51,7 @@ def is_secret(name):
 
 
 def in_example(name):
-    return name.endswith("_URL") or name == SECRET_COMMAND_VARIABLE
+    return name in (URL_VARIABLE, GATEWAY_URL_VARIABLE, SECRET_COMMAND_VARIABLE)
 
 
 def line_name(line):
@@ -98,6 +102,24 @@ def header_problem(value):
     return "holds a space, a line break or a non-ASCII character, which a request header cannot carry"
 
 
+def service_token_problem(value):
+    if SERVICE_TOKEN.fullmatch(value):
+        return None
+    return "must be name:secret, the token's name and its 32-character secret joined by a colon"
+
+
+def channel_problem(value):
+    if CHANNEL_ID.fullmatch(value):
+        return None
+    return "must be a channel ID, ch_ and 26 characters"
+
+
+def webhook_problem(value):
+    if links.webhook_parts(value):
+        return None
+    return "must be the whole Discord webhook URL, https://discord.com/api/webhooks/<id>/<token>"
+
+
 def secret_command_problem(value):
     try:
         settings.parse_secret_command(value)
@@ -117,11 +139,19 @@ def certificate_problem(value):
 LOCAL_CHECKS = {
     URL_VARIABLE: https_origin_problem,
     GATEWAY_URL_VARIABLE: https_origin_problem,
-    TOKEN_VARIABLE: header_problem,
+    TOKEN_VARIABLE: service_token_problem,
+    APP_TOKEN_VARIABLE: service_token_problem,
     GATEWAY_TOKEN_VARIABLE: header_problem,
     SECRET_COMMAND_VARIABLE: secret_command_problem,
     CERTIFICATE_VARIABLE: certificate_problem,
+    "DISCORD_WEBHOOK_URL": webhook_problem,
 }
+
+
+def local_check(name):
+    if name.startswith(CHANNEL_PREFIX):
+        return channel_problem
+    return LOCAL_CHECKS.get(name)
 
 
 def validate(values, config, environ):
@@ -130,8 +160,9 @@ def validate(values, config, environ):
     for name, value in values.items():
         if not value:
             continue
-        if name in LOCAL_CHECKS:
-            problem = LOCAL_CHECKS[name](value)
+        check = local_check(name)
+        if check:
+            problem = check(value)
             if problem:
                 problems.append(f"{name} {problem}")
                 invalid.append(name)
@@ -142,11 +173,7 @@ def validate(values, config, environ):
             lookup = settings.secret_lookup(environ, config)
             url, token = transport.service(lookup)
             cafile = environ.get(CERTIFICATE_VARIABLE) or config.get(CERTIFICATE_VARIABLE)
-            capabilities = transport.call(
-                url, token, "GET", "/v1/capabilities", opener=transport.opener(cafile),
-                timeout=transport.CHECK_TIMEOUT_SECONDS,
-            )
-            fields = credential_fields(transport.strategy_schemas(capabilities))
+            fields = connection_fields(transport.capabilities(url, token, transport.opener(cafile)))
         except Fault:
             unchecked = list(platform)
         else:
@@ -182,13 +209,27 @@ def write_atomically(path, text, mode):
         raise
 
 
+def update_file(path, values):
+    current = settings.read_text(path)
+    updated = merge(current, values, overwrite=True)
+    settings.parse_config(updated, path)
+    validate({name: value for name, value in values.items() if local_check(name)}, {}, {})
+    try:
+        write_atomically(path, updated, 0o600)
+    except OSError as error:
+        raise Fault(
+            "config_unwritable",
+            f"cannot write {path}: {error.strerror}; check that it is writable",
+        )
+
+
 def write_config(root, pairs, dry_run, environ):
     values = parse_pairs(pairs)
     root = Path(root).expanduser()
     if not root.is_dir():
         raise Fault(
             "config_unwritable",
-            f"--root {root} is not a directory; pass the project root, or ~ for every project",
+            f"--root {root} is not a directory; pass the project root, or ~ for every project under it",
         )
     config, example = root / CONFIG_PATH, root / EXAMPLE_PATH
     created = not config.is_file()

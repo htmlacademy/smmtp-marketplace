@@ -3,88 +3,59 @@ from __future__ import annotations
 import re
 
 from . import transport
+from .settings import SUBJECT
 
 CONTRACT_VERSION = "amplify-semantic/1"
 CONTENT_FORMAT = "gsx/1"
 PLACEMENTS = ("post", "reel", "story")
 TELEGRAM_FORMATS = ("regular", "rich")
-PLACEMENT_FIELDS = {"story": "businessConnectionId"}
-HOST_FORM_FIELD = "authMode"
+FLOW_STEPS = {"fields", "target", "redirect"}
 
 
 def environment_name(strategy, field):
-    return f"{strategy.upper()}_{re.sub(r'(?<!^)(?=[A-Z])', '_', field).upper()}"
+    return f"{strategy.upper().replace('-', '_')}_{re.sub(r'(?<!^)(?=[A-Z])', '_', field).upper()}"
 
 
-def credential_forms(schema):
-    forms = schema.get("anyOf") or [schema]
-    return [form for form in forms if HOST_FORM_FIELD not in form.get("properties", {})]
+def connections(entry):
+    try:
+        return entry["capabilities"]["connections"]
+    except (KeyError, TypeError):
+        raise transport.unexpected_shape("GET", "/v1/capabilities")
 
 
-def field_schema(schema, field):
+def publishing_forms(entry, placement):
+    return [
+        form for form in connections(entry)
+        if placement in ((form.get("publish") or {}).get("placements") or [])
+    ]
+
+
+def connectable(form):
+    steps = form.get("steps") or []
+    return bool(steps) and set(steps) <= FLOW_STEPS and form.get("available") is True
+
+
+def field_variables(strategy, form):
+    if (form.get("steps") or [None])[0] != "fields":
+        return {}
+    return {field: environment_name(strategy, field) for field in form.get("secret", [])}
+
+
+def field_schema(credential_schema, field):
+    forms = credential_schema.get("anyOf") or [credential_schema]
     definitions = [
         definition if isinstance(definition, dict) else {}
-        for form in credential_forms(schema)
+        for form in forms
         for name, definition in form.get("properties", {}).items()
         if name == field
     ]
     return definitions[0] if len(definitions) == 1 else {"anyOf": definitions}
 
 
-def serves(form, placement):
-    fields = form.get("properties", {})
-    marker = PLACEMENT_FIELDS.get(placement)
-    if marker:
-        return marker in fields
-    return not any(field in fields for field in PLACEMENT_FIELDS.values())
-
-
-def placement_forms(schema, placement):
-    forms = credential_forms(schema)
-    return [form for form in forms if serves(form, placement)] or forms
-
-
-def choose_form(strategy, schema, placement, lookup):
-    chosen = None
-    for form in placement_forms(schema, placement):
-        values, absent = {}, []
-        for field in form.get("properties", {}):
-            variable = environment_name(strategy, field)
-            value = lookup(variable)
-            if value:
-                values[field] = value
-            elif field in form.get("required", []):
-                absent.append(variable)
-        if not absent:
-            return form, values, []
-        chosen = chosen or (form, values, absent)
-    return chosen
-
-
-def complete_form(strategy, schema, lookup):
-    for form in credential_forms(schema):
-        required = form.get("required", [])
-        if all(lookup(environment_name(strategy, field)) for field in required):
-            return form
-    return None
-
-
-def resolve_credentials(targets, schemas, lookup, placement="post"):
-    credentials = []
-    missing = {}
-    for strategy in targets:
-        _, values, absent = choose_form(strategy, schemas[strategy], placement, lookup)
-        if absent:
-            missing[strategy] = absent
-        else:
-            credentials.append({"ref": strategy, "strategy": strategy, "values": values})
-    return credentials, missing
-
-
 def schema_problem(value, schema):
     if isinstance(schema.get("anyOf"), list):
         found = [schema_problem(value, option) for option in schema["anyOf"] if isinstance(option, dict)]
-        return None if not found or None in found else " and ".join(dict.fromkeys(found))
+        return None if not found or None in found else " or ".join(dict.fromkeys(found))
     if "const" in schema and value != str(schema["const"]):
         return f"must be {schema['const']}"
     kinds = schema.get("type", [])
@@ -108,15 +79,15 @@ def schema_problem(value, schema):
     return None
 
 
-def credential_fields(schemas):
+def connection_fields(strategies):
     try:
         return {
-            environment_name(strategy, field): (strategy, field_schema(schema, field))
-            for strategy, schema in schemas.items()
-            for form in credential_forms(schema)
-            for field in form.get("properties", {})
+            name: (strategy, field_schema(entry["credentialSchema"], field))
+            for strategy, entry in strategies.items()
+            for form in connections(entry)
+            for field, name in field_variables(strategy, form).items()
         }
-    except (AttributeError, TypeError):
+    except (AttributeError, KeyError, TypeError):
         raise transport.unexpected_shape("GET", "/v1/capabilities")
 
 
@@ -125,24 +96,25 @@ def platform_problem(name, value, fields):
         prefix = name.split("_", 1)[0]
         known = sorted(known for known in fields if known.split("_", 1)[0] == prefix)
         hint = f"; that platform's variables are {', '.join(known)}" if known else ""
-        return f"{name} is not a variable of any platform the service offers{hint}"
+        return f"{name} is not a variable of any platform the service connects{hint}"
     problem = schema_problem(value, fields[name][1])
     return f"{name} {problem} for {fields[name][0]}" if problem else None
 
 
-def build_body(operation, markdown, targets, credentials, media, placement="post", telegram_format="regular"):
-    destinations = [
-        {
-            "id": strategy,
-            "strategy": strategy,
-            "options": (
-                {"messageFormat": telegram_format}
-                if strategy == "telegram" and telegram_format != "regular"
-                else {}
-            ),
-        }
-        for strategy in targets
-    ]
+def build_body(operation, markdown, targets, channels, media, placement="post", telegram_format="regular"):
+    destinations = []
+    for strategy in targets:
+        destination = {"id": strategy}
+        if operation == "analyze":
+            destination["strategy"] = strategy
+        else:
+            destination["channelId"] = channels[strategy]
+        destination["options"] = (
+            {"messageFormat": telegram_format}
+            if strategy == "telegram" and telegram_format != "regular"
+            else {}
+        )
+        destinations.append(destination)
     body = {
         "input": {
             "contractVersion": CONTRACT_VERSION,
@@ -150,14 +122,13 @@ def build_body(operation, markdown, targets, credentials, media, placement="post
             "destinations": destinations,
         }
     }
+
     if operation != "verify":
         body["input"]["content"] = {
             "format": CONTENT_FORMAT,
             "markdown": markdown,
             "media": [{"id": item["id"], "kind": item["kind"]} for item in media],
         }
-    if operation in ("publish", "verify"):
-        for destination in destinations:
-            destination["credentialRef"] = destination["id"]
-        body["credentials"] = credentials
+    if operation != "analyze":
+        body = {"subject": SUBJECT, **body}
     return body
