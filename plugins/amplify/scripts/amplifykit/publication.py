@@ -8,12 +8,14 @@ from pathlib import Path
 
 from . import settings, transport
 from .errors import Fault
-from .platforms import build_body, resolve_credentials
+from .platforms import build_body
 from .settings import (
+    APP_TOKEN_VARIABLE,
     CONFIG_PATH,
     GATEWAY_TOKEN_VARIABLE,
     GATEWAY_URL_VARIABLE,
     URL_VARIABLE,
+    channel_variable,
     https_origin_problem,
 )
 
@@ -31,10 +33,14 @@ MEDIA_KINDS = {
 MEDIA_MAXIMUM_BYTES = 512 * 1024 * 1024
 MEDIA_MAXIMUM_COUNT = 64
 CHUNK_BYTES = 1024 * 1024
+
+
 MEDIA_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+
 UNREPORTED_CHANGES = {"blocked", "textual_fallback", "unwrapped"}
 OPERATIONS = {"preview": "analyze", "publish": "publish"}
 TARGET_STATES = {"preview": "ready", "publish": "published"}
+
 PUBLISH_WAIT_SECONDS = 300
 
 
@@ -105,7 +111,6 @@ def media_gateway(lookup):
 
 
 class Stream:
-
     def __init__(self, pieces):
         self.pieces = pieces
 
@@ -188,7 +193,7 @@ def summarise(command, result, media):
     files = {item["id"]: item["path"] for item in media}
     destinations = []
     for outcome in result.get("outcomes", []):
-        entry = {"strategy": outcome.get("strategy"), "state": outcome.get("state")}
+        entry = {"platform": outcome.get("strategy"), "state": outcome.get("state")}
         changes = outcome.get("changes", [])
         kept = [change for change in changes if change.get("class") not in UNREPORTED_CHANGES]
         media_changes = [change for change in kept if change.get("subject", {}).get("kind") == "media"]
@@ -206,6 +211,8 @@ def summarise(command, result, media):
             entry["errors"] = errors
 
         if command == "preview":
+
+
             projection = outcome.get("projection", {})
             measurements = outcome.get("measurements", projection.get("measurements"))
             if measurements is not None:
@@ -255,49 +262,46 @@ def run(command, folder, targets, media_paths, environ, cwd, placement="post", t
     if path is None and lookup(URL_VARIABLE) is None:
         raise Fault(
             "setup_required",
-            f"no {CONFIG_PATH.as_posix()} at or above {cwd} and no {URL_VARIABLE} set: crossposting is"
-            " not set up for this project; the amplify:setup skill sets it up, nothing was sent",
+            f"no {CONFIG_PATH.as_posix()} at or above {cwd} and no {URL_VARIABLE} set: publishing"
+            " is not set up for this project; the amplify:setup skill sets it up, nothing was sent",
         )
     connection = transport.opener(cafile)
-    url, token = transport.service(lookup)
+    url, token = transport.service(lookup, APP_TOKEN_VARIABLE)
 
-    schemas = transport.strategy_schemas(
-        transport.call(
-            url, token, "GET", "/v1/capabilities", opener=connection,
-            timeout=transport.CHECK_TIMEOUT_SECONDS,
-        )
-    )
-    unknown = [strategy for strategy in targets if strategy not in schemas]
+    strategies = transport.capabilities(url, token, connection, APP_TOKEN_VARIABLE)
+    unknown = [strategy for strategy in targets if strategy not in strategies]
     if unknown:
         raise Fault(
-            "strategy_unknown",
+            "platform_unknown",
             f"not a platform ID the service offers: {', '.join(unknown)}; use one of"
             " error.available, nothing was sent",
-            available=sorted(schemas),
+            available=sorted(strategies),
         )
-    try:
-        credentials, missing = resolve_credentials(targets, schemas, lookup, placement)
-    except (AttributeError, KeyError, TypeError):
-        raise transport.unexpected_shape("GET", "/v1/capabilities")
+    channels = {strategy: lookup(channel_variable(strategy)) for strategy in targets}
+    missing = {
+        strategy: [channel_variable(strategy)] for strategy, channel in channels.items() if not channel
+    }
     if command == "publish" and missing:
         raise Fault(
-            "credentials_missing",
-            "credential variables are not set, nothing was sent; the operator sets the"
-            " variables in error.missing",
+            "channel_missing",
+            "a platform has no channel on the service, nothing was sent; the amplify:setup skill"
+            " connects the platforms in error.missing",
             missing=missing,
         )
 
     operation = OPERATIONS[command]
     path = f"/v1/{operation}"
-    body = build_body(operation, markdown, targets, credentials, media, placement, telegram_format)
+    body = build_body(operation, markdown, targets, channels, media, placement, telegram_format)
     gateway = media_gateway(lookup) if media else None
+
     headers = (
         {"Idempotency-Key": secrets.token_hex(16), "Prefer": f"wait={PUBLISH_WAIT_SECONDS}"}
         if command == "publish"
         else None
     )
     answer = transport.call(
-        url, token, "POST", path, encode(body, media, gateway), opener=connection, headers=headers
+        url, token, "POST", path, encode(body, media, gateway), opener=connection, headers=headers,
+        token_variable=APP_TOKEN_VARIABLE,
     )
     if command == "publish" and isinstance(answer, dict) and answer.get("result", {}) is None:
         raise Fault(
@@ -308,8 +312,8 @@ def run(command, folder, targets, media_paths, environ, cwd, placement="post", t
     try:
         destinations = summarise(command, answer.get("result", {}), media)
         for entry in destinations:
-            if entry["strategy"] in missing:
-                entry["missing"] = missing[entry["strategy"]]
+            if entry["platform"] in missing:
+                entry["missing"] = missing[entry["platform"]]
         ok = outcome_ok(command, destinations, missing)
     except (AttributeError, KeyError, TypeError):
         raise transport.unexpected_shape("POST", path)

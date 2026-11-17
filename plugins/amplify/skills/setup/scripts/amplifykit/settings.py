@@ -9,17 +9,29 @@ from pathlib import Path
 from .errors import Fault
 
 CONFIG_PATH = Path(".smmtp", ".env.local")
-LEGACY_CONFIG_PATH = Path(".amplify", ".config")
 URL_VARIABLE = "AMPLIFY_REST_URL"
 TOKEN_VARIABLE = "AMPLIFY_REST_TOKEN"
+APP_TOKEN_VARIABLE = "AMPLIFY_REST_APP_TOKEN"
 GATEWAY_URL_VARIABLE = "AMPLIFY_MEDIA_GATEWAY_URL"
 GATEWAY_TOKEN_VARIABLE = "AMPLIFY_MEDIA_GATEWAY_TOKEN"
 SECRET_COMMAND_VARIABLE = "AMPLIFY_REST_SECRET_COMMAND"
 CERTIFICATE_VARIABLE = "SSL_CERT_FILE"
+CHANNEL_PREFIX = "AMPLIFY_CHANNEL_"
 SECRET_PLACEHOLDER = "{name}"
-SECRET_TIMEOUT_SECONDS = 120
+DEFAULTS = {"BLUESKY_HOST": "bsky.social"}
+SUBJECT = "default"
+SERVICE_TOKEN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}:[a-z2-7]{32}")
+CHANNEL_ID = re.compile(r"ch_[a-z2-7]{26}")
 VARIABLE_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
+
+
 HEADER_SAFE = re.compile(r"[\x21-\x7e]+")
+
+SECRET_TIMEOUT_SECONDS = 120
+
+
+def channel_variable(strategy):
+    return CHANNEL_PREFIX + strategy.upper().replace("-", "_")
 
 
 def https_origin_problem(value):
@@ -35,10 +47,9 @@ def https_origin_problem(value):
 
 def find_config(start):
     for directory in (start, *start.parents):
-        for relative in (CONFIG_PATH, LEGACY_CONFIG_PATH):
-            candidate = directory / relative
-            if candidate.is_file():
-                return candidate
+        candidate = directory / CONFIG_PATH
+        if candidate.is_file():
+            return candidate
     return None
 
 
@@ -82,7 +93,6 @@ def parse_config(text, path):
 
 
 class Lookup:
-
     def __init__(self, environ, config, command):
         self.environ = environ
         self.config = config
@@ -97,7 +107,12 @@ class Lookup:
                 found = self.config[name], "config"
             else:
                 value = read_secret(self.command, name) if self.command else None
-                found = (value, "store") if value else (None, None)
+                if value:
+                    found = value, "store"
+                elif name in DEFAULTS:
+                    found = DEFAULTS[name], "default"
+                else:
+                    found = None, None
             self.resolved[name] = found
         return self.resolved[name]
 
@@ -137,8 +152,8 @@ def read_secret(command, name):
     if not VARIABLE_NAME.fullmatch(name):
         raise Fault(
             "variable_name_invalid",
-            f"not a variable name: {name!r}; the service's credential schema names a field"
-            " this script cannot map to a variable, so report it",
+            f"not a variable name: {name!r}; the service names a connection field this script"
+            " cannot map to a variable: tell whoever runs the service",
         )
     try:
         completed = subprocess.run(
