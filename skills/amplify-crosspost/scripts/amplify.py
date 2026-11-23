@@ -24,55 +24,41 @@ from amplifykit.publication import TARGET_STATES, run
 HELP = """\
 variables:
   Read from the environment, then the nearest .smmtp/.env.local at or above
-  the working directory (~/.smmtp/.env.local serves every project under ~
-  without its own), then AMPLIFY_REST_SECRET_COMMAND when set, then a default.
-  An empty value is unset.
+  the working directory, then AMPLIFY_REST_SECRET_COMMAND. Empty means unset.
 
-  AMPLIFY_REST_URL     service URL, https
-  AMPLIFY_REST_TOKEN   master token, name:secret: connects platforms, cannot
-                       publish
-  AMPLIFY_REST_APP_TOKEN
-                       app token, name:secret: publishes; app-token writes it
-  AMPLIFY_CHANNEL_<PLATFORM>
-                       a platform's channel, ch_...; connect writes it
-  <PLATFORM>_<FIELD>   a value a platform's connection asks for, such as
-                       TELEGRAM_BOT_TOKEN, or DISCORD_WEBHOOK_URL for a whole
-                       webhook link; read only by connect, which empties it in
-                       the file once the channel exists
+  AMPLIFY_REST_URL             service root, https
+  AMPLIFY_REST_ACCOUNT         account name
+  AMPLIFY_REST_SECRET          account secret; with the name, connects channels
+  AMPLIFY_REST_APP_TOKEN       app token, publishes; app-token writes it
+  AMPLIFY_CHANNEL_<PLATFORM>   channel ID; connect writes it
+  <PLATFORM>_<FIELD>           value a connection asks for, such as
+                               TELEGRAM_BOT_TOKEN or DISCORD_WEBHOOK_URL;
+                               connect empties it once connected
   AMPLIFY_MEDIA_GATEWAY_URL, AMPLIFY_MEDIA_GATEWAY_TOKEN
-                       media gateway origin and token, sent with posts that
-                       carry media; without both the service leaves media out
-  AMPLIFY_REST_SECRET_COMMAND
-                       command printing one variable's value, {name} replaced
-                       by its name, run without a shell for variables neither
-                       the environment nor the file sets; non-zero exit means
-                       unset. No store is opened without it. macOS keychain:
-                       security find-generic-password -s {name} -w
-  SSL_CERT_FILE        certificate bundle to trust after
-                       CERTIFICATE_VERIFY_FAILED
+                               media gateway; without both, media is left out
+  AMPLIFY_REST_SECRET_COMMAND  prints one variable's value, {name} replaced by
+                               its name; no shell; non-zero exit means unset.
+                               macOS: security find-generic-password -s {name} -w
+  SSL_CERT_FILE                certificate bundle, for a network that replaces
+                               certificates
 
 output:
-  One JSON object on stdout; each command's --help lists its fields. A
-  failure is {"ok": false, "error": {"code", "message", ...}}, the message
-  naming what to do. When "ok" is false, stderr has one line naming what
-  failed.
+  One JSON object on stdout; when ok is false, stderr carries one line. A
+  failed command is {"ok": false, "error": {"code", "message", ...}}, message
+  saying what to do; doctor, a connect stop and destinations report in their
+  own fields. error.trouble: service (the service or a platform is failing,
+  the setup is fine) or network (this computer cannot reach the service).
 
 exit status:
-  0  "ok" is true
-  1  a command failed, or preview or publish left a platform short of ready
-     or published
+  0  ok is true
+  1  a command failed, doctor hit error.trouble, or a platform did not reach
+     ready or published
   2  invalid command line
   3  doctor found the setup incomplete, or connect stopped for the operator
 
 examples:
-  amplify.py plan --link https://t.me/channelname --link https://www.linkedin.com/company/acme
-  amplify.py config --root . --set AMPLIFY_REST_URL=https://service.example
-  amplify.py app-token
   amplify.py connect --to telegram --link https://t.me/channelname
-  amplify.py doctor --to telegram
   amplify.py preview --post content/2026-09-24-release --to telegram --to bluesky
-  amplify.py publish --post content/2026-09-24-release --to telegram \\
-      --media content/2026-09-24-release/cover.png
 
 troubleshooting:
   CERTIFICATE_VERIFY_FAILED on the first call is this machine's trust store,
@@ -86,228 +72,205 @@ Run "amplify.py <command> --help" for the fields of a command.
 """
 
 PREVIEW_HELP = """\
-Show how the post lands on each platform, publishing nothing. Without the
-settings file or AMPLIFY_REST_URL it stops with setup_required.
+Show how the post lands on each platform, publishing nothing. Stops with an
+error naming amplify-setup when publishing is not set up.
 
 post:
-  A folder holding index.md, whose Markdown is the post. --media attaches
-  images and videos in the order given: JPEG, PNG, WebP, GIF, MP4, M4V, MOV
-  or WebM, at most 512 MiB together. A line of its own, with blank lines
-  around it, places attached files in the text: ::media{id="cover.png"}
-  places one, ::media{ids="a.png,b.png" layout="collage"} or
-  layout="slideshow" places several as one group. A file is placed by its file
-  name, which must be up to 128 Latin letters, digits and . _ : -, start with a
-  letter or digit, and be unique among the attached files. Telegram with
-  --telegram-format rich and Discord keep the places and put unplaced files
-  first; elsewhere files go out as attachments and changes says so. Markdown
-  image syntax stays literal text. --placement post (default), reel (takes the
-  first video) or story (takes the first image or video); a platform without
-  reels posts the video as a post and says so in changes, one without stories
-  blocks.
+  --post is a folder holding index.md. --media attaches JPEG, PNG, WebP, GIF,
+  MP4, M4V, MOV or WebM files in the order given, at most 64 files and 512 MiB
+  together.
 
-  --telegram-format rich sends a Telegram Rich Message: tables, nested and
-  task lists, quotes, code, highlight, spoilers and formulas ($...$, fenced
-  math) survive, headings become bold paragraphs, the text may run to 32768
-  characters instead of 4096 (1024 with media), and up to 50 images, videos
-  and GIFs go in the same message at their ::media places. A collage takes
-  images and videos, a slideshow images only; any other group is split.
-  Posts only. Other platforms ignore it.
+placing files:
+  A ::media line between blank lines places attached files by file name:
+    ::media{id="cover.png"}
+    ::media{ids="a.png,b.png" layout="collage"}
+    ::media{ids="a.png,b.png" layout="slideshow"}
+  A placeable name is unique among the files, up to 128 Latin letters, digits
+  and . _ : -, starting with a letter or digit. A platform that cannot keep a
+  place attaches the file and reports media_attached. Markdown image syntax
+  stays literal text.
+
+--placement:
+  reel takes the first video, story the first image or video. A platform
+  without reels posts the video as a post; one without stories blocks.
+
+--telegram-format rich:
+  A Telegram Rich Message, posts only: tables, nested and task lists, quotes,
+  code, highlight, spoilers and formulas survive, headings become bold. Holds
+  32768 characters (regular: 4096, or 1024 with media) and 50 files at their
+  ::media places. A collage takes images and videos, a slideshow images only;
+  any other group is split.
+
+--thread:
+  Posts only. A text too long for one post becomes a thread of up to 25 posts,
+  each replying to the one before, on platforms with threads; others cut it.
+  A Telegram rich message stays one message.
 
 output:
   destinations, one per --to:
     platform
-    state           ready or blocked
-    projection      the post as the platform receives it, in the platform's
-                    own format, such as Telegram HTML; none when blocked
-    measurements    field, unit, value and maximum after fitting (maximum
-                    null: no cap); block or item locate a block or media item
-    changes         what the platform changes beyond formatting: subject,
-                    class, details. A text cut to fit: class approximated,
-                    details.reason text_truncated, details.truncated with
-                    unit, value (original length) and maximum. subject.range
-                    is [start, end) in UTF-16 units of the Markdown. A placed
-                    file moved to attachments: media_attached; a group split:
-                    media_group_split
-    media           per attached file left out or changed: file, class,
-                    details, such as details.reason gateway_not_configured
-    pending_checks  what the service cannot check before publishing: code,
-                    file, details
-    missing         [channel variable] of a platform not connected yet
-    errors          code, retry, file, details; a blocked platform also lists
-                    the change that blocks it, with retry null
-    warnings        code, details
+    state             ready or blocked
+    projection        the post as the platform receives it; absent when
+                      blocked or when parts is present
+    parts             the thread, per post: projection, files
+    thread_available  the text is cut here and --thread can keep it whole, on
+                      Telegram without rich
+    changes           what the platform changes beyond formatting: subject,
+                      class, details. details.reason text_truncated carries
+                      details.truncated: unit, value (original), maximum
+    media             attached files left out or changed: file, class, details
+    pending_checks    what only publishing can prove: code, file, details
+    missing           channel variable of a platform not connected
+    measurements      when blocked: field, unit, value, maximum
+    errors            code, retry, file, details
+    warnings          code, details
 """
 
 PUBLISH_HELP = """\
-Publish the post to each platform's channel; nothing is sent while a platform
-has no channel. The post, --media, --placement and --telegram-format are as in
-preview --help. The service may take up to 10 minutes and waits up to 300
-seconds for a platform still processing the post. Never retries: after a lost
-answer the post may already be out, so check the platform first.
+Publish the post to each platform's channel; nothing is sent while any lacks
+one. Arguments as in preview --help. May run for 10 minutes. Never retries:
+after a lost answer the post may already be out.
 
 output:
   destinations, one per --to:
     platform
-    state           published, pending (still processing when the wait ended;
-                    not confirmed), blocked, failed, cancelled or
-                    indeterminate
-    url             published only: link to the post, or null when the
-                    platform gave none, the post being out all the same
+    state   published, partial (a thread with only its first posts out),
+            pending (not confirmed yet), indeterminate (may be out), blocked,
+            failed or cancelled
+    url     the post or a thread's first post; on a published post, null
+            means the platform gave none
+    parts   the thread, per post: index, url, state confirmed (out), possible
+            (may be out) or absent (not sent)
     changes, media, errors, warnings
-                    as in preview
+            as in preview
 """
 
 DOCTOR_HELP = """\
-Check the setup and name the next stage, publishing nothing. With --to, also
-check those platforms' channels with the platform for --placement.
-
-Of the variables, only URLs and channel IDs are printed. A variable's source is
-environment, config, store, default or null.
+Check the setup and say what to do next, publishing nothing. With --to, also
+verify those platforms' channels for --placement.
 
 output:
-  ok              nothing below is broken and every --to platform is verified;
-                  next may still name a stage not yet done
-  next            first stage not done: service, app_token, media_gateway
-                  (partial or invalid only), platforms (also while no channel
-                  exists), verify (platforms.unverified not empty); null when
-                  done
+  ok              nothing is broken and every --to platform is verified
+  stage           first stage not done: service, app_token, media_gateway,
+                  platforms or verify; null when done
+  next            what to do for that stage; null when done
   config          the settings file read, or null
-  secret_command  where AMPLIFY_REST_SECRET_COMMAND is set: environment,
-                  config or null
-  service         url, variables with sources, readiness, or error (also when
-                  AMPLIFY_REST_TOKEN is not a master token)
+  secret_command  where AMPLIFY_REST_SECRET_COMMAND is set, or null
+  service         url, unset, readiness, or error, also for error.trouble in
+                  any later check
   app_token       state: none, working, or unusable with reason or error
-  media_gateway   url, variables, state: complete, partial, invalid or none
+  media_gateway   url, unset, state: complete, partial, invalid or none
   platforms:
-    placement     the placement --to was checked for
-    channels      per platform with a channel, or named with --to:
-      channel
-      state       none, connected, reauth_required (the platform rejected its
-                  key or sign-in), gone (no longer on the service), or error
-                  (could not be read, with error)
-      title       its name on the platform, or null
-      placements
-      verify      with --to: state, identity, url, errors with code, retry
-                  and details
-    unverified    connected platforms not checked in this run
+    placement
+    channels      per platform with a channel or named with --to: channel,
+                  title, placements, state: none, connected, reauth_required
+                  (the platform rejected its key or sign-in), gone or error;
+                  with --to, verify: state, identity, url, errors
+    unverified    connected platforms not verified in this run
     unknown       --to values that are not platforms
     error         a verify call that failed as a whole
 """
 
 PLAN_HELP = """\
 Say what connecting each of the operator's channels takes, from the links or
-addresses they give, before anything is connected. Without a working service
-it still reads the links; available is then null.
+addresses they give. Before the service answers it only reads the links:
+available is null, and sign_in and asks are absent.
 
 output:
-  service         ready, or the error code that kept the service from answering
+  service         ready, or the code of the error that kept it from answering
+  trouble         as error.trouble, when that error has one
   placement
   channels        per --link, then per --to:
     link
     platform      null: ask which platform the channel is on
-    address       what the link names, as connect --link takes it
-    connected     this platform's channel publishes --placement; before the
-                  service answers, its channel variable is set
-    title         when the channel exists: its name on the platform, or null
+    address       what the link names
+    connected     the platform's one channel publishes --placement, which may
+                  not be this link (compare title); null when unknown
+    title         the channel's name on the platform, or null
     available     true; false with reason; null before the service answers
     form          the way to connect, when the link settles it
     sign_in       the operator signs in on the platform
     asks          values the operator supplies before connect
     question, forms
-                  what to ask the operator when the link does not settle the
-                  form; their answer goes to connect as --form
+                  what to ask when the link does not settle the form; the
+                  answer goes to connect as --form
 """
 
 CONNECT_HELP = """\
-Connect a platform's channel with the master token, so preview and publish
-reach it. Nothing is posted. Runs the platform's steps until done or until the
-operator has to act, then stops with next and the flow to continue with
---flow; give the same --to, --placement, --form and --link again. A flow
-expires 15 minutes after it starts.
+Connect a platform's channel so preview and publish reach it; nothing is
+posted. Runs the platform's steps until done or until the operator has to act,
+then stops with next and flow. Continue with --flow and the same --to,
+--placement, --form and --link. A flow expires after 15 minutes.
 
---link takes the operator's link or address of the channel as they gave it
-and derives what the platform needs: a Telegram channel's name, a Mastodon
-server, a Bluesky handle, the page to pick from a list. For a Telegram
-channel without a public name, its invite link makes connect ask Telegram,
-with the bot token, which channel made the bot an administrator within the
-last day.
+--link takes the operator's link or address as given. A private Telegram
+channel's invite link finds the channel that made the bot an administrator
+within the last day.
 
-  fields    sends the values plan lists as asks; all must be set before the
-            first run
-  redirect  stops with url for the operator to sign in; the run with --flow
-            waits up to 120 s for the sign-in
-  target    takes the channel --link names; otherwise stops with targets to
-            choose from (pass the title as --target) or for the link
+steps:
+  fields    sends the values plan lists as asks
+  redirect  stops with url for the operator to sign in; a run with --flow
+            waits up to 90 s for it
+  target    takes the channel --link names or the only one listed, else stops
+            with targets; pass the chosen title as --target
 
-On a platform that already has a channel, a form for another placement, such
-as stories, joins that channel, and connecting it again for a placement it
-has renews its key or sign-in in place. When done, AMPLIFY_CHANNEL_<PLATFORM>
-is written to the settings file in effect.
+A platform keeps one channel: another form joins it, the same form renews its
+key or sign-in. Writes AMPLIFY_CHANNEL_<PLATFORM> when done.
 
 output:
   ok        true once connected
   platform, flow
   step      where it stopped: fields, redirect or target
-  next      what to do, then how to run again
+  next      what to do
   url, targets, missing
             what that step needs
-  account   id and name of the account that will publish, such as the bot to
-            make an administrator, once the platform confirmed it
+  identity  id and name of what publishes, such as the bot
   channel, title
-            when connected: the channel and its name on the platform, null
-            when the platform gives none
-  cleared   field variables emptied in the file
-  stored    field variables read from the secret store, which the operator
-            may now delete there
-  error     its message says what to do; on step_refused the flow stays
-            open, so continue it with error.flow; a channel the platform
-            refused carries reason, such as Telegram chat_not_found,
-            bot_not_member, bot_not_admin or can_post_messages_missing
+            when connected
+  cleared   values emptied in the settings file
+  stored    values read from the secret store, now safe to delete there
+  error     message says what to do; flow to continue after a refusal or
+            error.trouble; reason names a channel the platform refused
 """
 
 APP_TOKEN_HELP = """\
-Issue an app token with the master token and write it to the settings
-file in effect as AMPLIFY_REST_APP_TOKEN, never printing it. The token it
-replaces is revoked.
+Issue the app token and write it to the settings file as
+AMPLIFY_REST_APP_TOKEN, never printing it. The one it replaces is revoked.
 
 output:
-  revoked   the replaced token's name, or null
+  revoked      the replaced token's name, or null
+  not_revoked  a replaced token the service kept active; the new one works
 """
 
 CONFIG_HELP = """\
-Write NAME=value lines into DIR/.smmtp/.env.local, owner-readable only. A new
-file starts from the annotated template. A value replaces the line that sets
-its name, else its commented-out example, else goes on a new line; other lines
-stay. An empty value leaves NAME= for the operator to fill. Secret values are
-never printed.
+Write NAME=value lines to DIR/.smmtp/.env.local, owner-readable, and NAME= to
+the shareable DIR/.smmtp/.env.example, which keeps only URLs and
+AMPLIFY_REST_SECRET_COMMAND. Other lines stay. An empty value leaves NAME= for
+the operator to fill. Secrets are never printed. One invalid value writes
+nothing.
 
-Every value is checked first; one failure writes nothing:
-  AMPLIFY_REST_URL, AMPLIFY_MEDIA_GATEWAY_URL
-                                       an https root, no path or user
-  AMPLIFY_REST_TOKEN, AMPLIFY_REST_APP_TOKEN
-                                       name:secret
-  AMPLIFY_MEDIA_GATEWAY_TOKEN          one line of visible ASCII
-  AMPLIFY_CHANNEL_<PLATFORM>           ch_...
-  AMPLIFY_REST_SECRET_COMMAND          parses and contains {name}
-  SSL_CERT_FILE                        a bundle that loads
-  DISCORD_WEBHOOK_URL                  a whole Discord webhook URL
-  other names                          a value a connection asks for, checked
-                                       against the service's schema when it
-                                       answers, else written unchecked
-
-DIR/.smmtp/.env.example, the shareable copy without secrets, gets the URL
-values and AMPLIFY_REST_SECRET_COMMAND, and NAME= for every other name, on
-empty lines only.
+checks:
+  AMPLIFY_REST_URL, AMPLIFY_MEDIA_GATEWAY_URL   https root, no path or user
+  AMPLIFY_REST_ACCOUNT                          account name as issued
+  AMPLIFY_REST_SECRET                           32 characters as issued; an
+                                                account:secret line fills both
+  AMPLIFY_REST_APP_TOKEN                        an issued app token
+  AMPLIFY_MEDIA_GATEWAY_TOKEN                   visible ASCII
+  AMPLIFY_CHANNEL_<PLATFORM>                    ch_...
+  AMPLIFY_REST_SECRET_COMMAND                   parses and contains {name}
+  SSL_CERT_FILE                                 a bundle that loads
+  DISCORD_WEBHOOK_URL                           a whole webhook URL
+  other names                                   the service's schema, when it
+                                                answers
 
 output:
-  dry_run     true when nothing was written
-  config, example, created
-  changes     per name: action (fill, replace, add), secret, value (null when
-              secret)
+  dry_run   true when nothing was written
+  config    the settings file
+  changes   per name: action (fill, replace, add), secret, value (null when
+            secret)
   checked, unchecked
-              connection values whose format was or was not checked against
-              the service; only connect proves a key works
-  error       config_value_invalid with invalid listing the names refused
+            connection values checked or not against the service; only
+            connect proves a key works
+  error     config_value_invalid, with invalid naming the refused values
 """
 
 
@@ -398,6 +361,10 @@ def build_parser():
             "--telegram-format", choices=TELEGRAM_FORMATS, default="regular",
             help="rich sends a Telegram Rich Message; regular by default",
         )
+        command.add_argument(
+            "--thread", action="store_true",
+            help="publish a text too long for one post as a thread; off by default",
+        )
     return parser
 
 
@@ -427,8 +394,19 @@ def failure_line(command, envelope):
     return "amplify.py: error: " + re.sub(r"[\r\n]+", " ", text)
 
 
+def exit_status(command, envelope):
+    if envelope["ok"]:
+        return 0
+    if command not in ("doctor", "connect") or "error" in envelope:
+        return 1
+    return 1 if ((envelope.get("service") or {}).get("error") or {}).get("trouble") else 3
+
+
 def main(argv=None, environ=None, cwd=None):
-    arguments = build_parser().parse_args(argv)
+    parser = build_parser()
+    arguments = parser.parse_args(argv)
+    if getattr(arguments, "thread", False) and arguments.placement != "post":
+        parser.error("--thread applies only to --placement post")
     environ = os.environ if environ is None else environ
     cwd = Path.cwd() if cwd is None else Path(cwd)
     try:
@@ -448,21 +426,19 @@ def main(argv=None, environ=None, cwd=None):
         else:
             envelope = run(
                 arguments.command, arguments.post, arguments.to, arguments.media, environ, cwd,
-                arguments.placement, arguments.telegram_format,
+                arguments.placement, arguments.telegram_format, arguments.thread,
             )
     except Fault as fault:
         envelope = {"ok": False, "error": fault.as_object()}
     if not envelope["ok"]:
         print(failure_line(arguments.command, envelope), file=sys.stderr)
     try:
-        json.dump(envelope, sys.stdout, ensure_ascii=False, indent=2)
+        json.dump(envelope, sys.stdout, ensure_ascii=False, separators=(",", ":"))
         sys.stdout.write("\n")
         sys.stdout.flush()
     except BrokenPipeError:
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-    if envelope["ok"]:
-        return 0
-    return 3 if arguments.command in ("doctor", "connect") and "error" not in envelope else 1
+    return exit_status(arguments.command, envelope)
 
 
 if __name__ == "__main__":

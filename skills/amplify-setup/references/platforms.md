@@ -1,6 +1,6 @@
 # Platform guides
 
-How to walk the operator through connecting each kind of channel. Read only the section for the channel at hand. Give every link and menu path as written; if the operator does not find an item, ask what they see and guide from there. Values in `CAPS` are what `plan` lists in `asks`: collect each through Writing values in SKILL.md, never by naming the variable to the operator. The last line of each guide is what only the first post proves.
+Read only the section for the channel at hand. Give every link and menu path as written; if the operator does not find an item, ask what they see and guide from there. Collect values in `CAPS` as Saving values in SKILL.md says, never naming the variable to the operator. The last line of each guide is what only the first post proves.
 
 ## Telegram channel or group
 
@@ -8,7 +8,7 @@ Publishing goes through a bot the operator creates; it posts in the channel's na
 
 1. Create the bot: open https://t.me/BotFather in Telegram, press Start, send `/newbot`, choose a display name, then a username ending in `bot`. BotFather answers with a long line like `123456789:AAH…`: the bot's key, `TELEGRAM_BOT_TOKEN`.
 2. Make it an administrator of the channel: open the channel → its name at the top → Edit (pencil) → Administrators → Add Admin → search the bot's username → keep "Post Messages" on → Save. In a group, adding the bot as a member allowed to send messages is enough.
-3. `connect --to telegram --link <their channel link>`. A private channel's invite link works once step 2 is done.
+3. `connect --to telegram --link <their channel link>`. A private channel's invite link works once step 2 is done; a private group reached by its invite link needs the bot as an administrator too.
 
 On `chat_not_found`, a private channel needs its invite link.
 
@@ -80,5 +80,7 @@ X, LinkedIn, Facebook pages, Instagram, Threads, YouTube and Slack connect by si
 - **Instagram**: a Business or Creator account. Every post needs an image or video.
 - **Facebook**: a page they manage with the right to create content.
 - **Threads**: a public account.
-- **YouTube**: the Google account that owns the channel. Every post needs a video; visibility and the daily upload quota show only on the first upload.
+- **YouTube**: the Google account that owns the channel. Every post needs a video.
 - **Slack**: after signing in, they invite the app's bot to the channel with `/invite`.
+
+First post proves: on YouTube, the video's visibility and the daily upload quota; elsewhere, nothing.

@@ -9,7 +9,7 @@ from .errors import Fault
 from .platforms import connectable, field_variables, publishing_forms
 from .settings import APP_TOKEN_VARIABLE, SERVICE_TOKEN, SUBJECT, channel_variable
 
-REDIRECT_WAIT_SECONDS = 120
+REDIRECT_WAIT_SECONDS = 90
 POLL_SECONDS = 3
 WEBHOOK_VARIABLE = "DISCORD_WEBHOOK_URL"
 TELEGRAM_TOKEN_VARIABLE = "TELEGRAM_BOT_TOKEN"
@@ -17,7 +17,7 @@ BUSINESS_VARIABLE = "TELEGRAM_BUSINESS_CONNECTION_ID"
 STEP_REFUSALS = {
     "CREDENTIAL_REJECTED": "the platform refused the values sent: the operator checks them and corrects them, then run again with --flow",
     "FLOW_STEP_INVALID": "a value does not have the shape the platform takes: the operator corrects it, then run again with --flow",
-    "TARGET_UNAVAILABLE": "the account cannot publish there: the operator gives it access, then run again with --flow",
+    "TARGET_UNAVAILABLE": "the publishing identity cannot publish there: the operator gives it access, then run again with --flow",
 }
 TARGET_REASONS = {
     "chat_not_found": "the platform finds no channel at that address: check the link with the operator, then run again with --flow and --link",
@@ -34,7 +34,7 @@ CONNECT_REFUSALS = {
     "AUTHORIZATION_ACCOUNT_MISMATCH": "the key or sign-in belongs to another account than the channel's: use that account's, or to connect a different channel empty AMPLIFY_CHANNEL_<PLATFORM> with config first",
     "AUTHORIZATION_CONFLICT": "the channel is already connected for these placements: run doctor",
     "FLOW_LIMIT_EXCEEDED": "too many flows are open: wait until they expire, 15 minutes after they start, then connect again without --flow",
-    "FLOW_FORM_UNAVAILABLE": "the service cannot start that flow: whoever runs the service sets it up",
+    "FLOW_FORM_UNAVAILABLE": "the service cannot start that flow: whoever gave the operator access sets it up",
     "FLOW_NOT_FOUND": "the flow expired: connect again without --flow",
 }
 
@@ -47,16 +47,16 @@ def telegram_unreachable():
     )
 
 
-def open_master(environ, cwd):
+def open_account(environ, cwd):
     path, _, lookup, cafile = settings.load(environ, cwd)
     connection = transport.opener(cafile)
-    url, master = transport.service(lookup)
+    url, credential = transport.service(lookup)
     account.require_config(path)
-    return path, lookup, connection, url, master
+    return path, lookup, connection, url, credential
 
 
 def app_token(environ, cwd):
-    path, lookup, connection, url, master = open_master(environ, cwd)
+    path, lookup, connection, url, credential = open_account(environ, cwd)
     if lookup.source(APP_TOKEN_VARIABLE) == "environment":
         raise Fault(
             "app_token_in_environment",
@@ -64,14 +64,17 @@ def app_token(environ, cwd):
             " there first, nothing was issued",
         )
     previous = lookup(APP_TOKEN_VARIABLE)
-    name, token = account.issue_app_token(url, master, connection)
+    name, token = account.issue_app_token(url, credential, connection)
     update_file(path, {APP_TOKEN_VARIABLE: token})
-    revoked = None
+    report = {"ok": True, "revoked": None}
     if previous and SERVICE_TOKEN.fullmatch(previous):
         old = previous.split(":", 1)[0]
         if old != name:
-            revoked = account.revoke_app_token(url, master, connection, old)
-    return {"ok": True, "revoked": revoked}
+            try:
+                report["revoked"] = account.revoke_app_token(url, credential, connection, old)
+            except Fault:
+                report["not_revoked"] = old
+    return report
 
 
 def read_link(strategy, link):
@@ -89,6 +92,11 @@ def read_link(strategy, link):
 
 def choose_form(strategy, entry, placement, form_id, info=None):
     forms = publishing_forms(entry, placement)
+    if not forms:
+        raise Fault(
+            "placement_unavailable",
+            f"{strategy} has no {placement}; tell the operator, nothing was started",
+        )
     form_id = form_id or (info or {}).get("form")
     if form_id is not None:
         forms = [form for form in forms if form.get("id") == form_id]
@@ -103,7 +111,7 @@ def choose_form(strategy, entry, placement, form_id, info=None):
     if not usable:
         raise Fault(
             "form_unavailable",
-            f"the service cannot connect {strategy} for a {placement}; whoever runs the service"
+            f"the service cannot connect {strategy} for a {placement}; whoever gave the operator access"
             " sets it up, nothing was started",
         )
     if len(usable) > 1:
@@ -160,9 +168,9 @@ def flow_path(flow_id):
     return f"/v1/flows/{urllib.parse.quote(flow_id, safe='')}"
 
 
-def flow_call(url, master, connection, method, path, body=None):
+def flow_call(url, credential, connection, method, path, body=None):
     try:
-        state = account.master_call(url, master, connection, method, path, body)
+        state = account.account_call(url, credential, connection, method, path, body)
     except Fault as fault:
         code = (fault.details.get("problem") or {}).get("code")
         if code in STEP_REFUSALS:
@@ -175,12 +183,12 @@ def flow_call(url, master, connection, method, path, body=None):
     return state
 
 
-def start(url, master, connection, strategy, form, channel_id):
+def start(url, credential, connection, strategy, form, channel_id):
     body = {"strategy": strategy, "form": form["id"], "subject": SUBJECT}
     existing = None
     if channel_id:
         try:
-            existing = account.channel(url, master, connection, channel_id)
+            existing = account.channel(url, credential, connection, channel_id)
         except Fault as fault:
             if (fault.details.get("problem") or {}).get("code") != "CHANNEL_NOT_FOUND":
                 raise
@@ -190,16 +198,16 @@ def start(url, master, connection, strategy, form, channel_id):
         )
         if present is not None:
             path = f"/v1/authorizations/{urllib.parse.quote(present['id'], safe='')}/reauthorize"
-            return flow_call(url, master, connection, "POST", path, {})
+            return flow_call(url, credential, connection, "POST", path, {})
         body["channelId"] = channel_id
-    return flow_call(url, master, connection, "POST", "/v1/flows", body)
+    return flow_call(url, credential, connection, "POST", "/v1/flows", body)
 
 
-def wait_past_redirect(url, master, connection, flow_id, state):
+def wait_past_redirect(url, credential, connection, flow_id, state):
     deadline = time.monotonic() + REDIRECT_WAIT_SECONDS
     while (state.get("step") or {}).get("kind") == "redirect" and time.monotonic() < deadline:
         time.sleep(POLL_SECONDS)
-        state = flow_call(url, master, connection, "GET", flow_path(flow_id))
+        state = flow_call(url, credential, connection, "GET", flow_path(flow_id))
     return state
 
 
@@ -251,9 +259,9 @@ def stop(report, step, next_step, **fields):
 
 
 def connect(strategy, placement, form_id, flow_id, link, target, environ, cwd):
-    path, lookup, connection, url, master = open_master(environ, cwd)
+    path, lookup, connection, url, credential = open_account(environ, cwd)
     info = read_link(strategy, link)
-    strategies = transport.capabilities(url, master, connection)
+    strategies = transport.capabilities(url, credential, connection)
     if strategy not in strategies:
         raise Fault(
             "platform_unknown",
@@ -261,11 +269,11 @@ def connect(strategy, placement, form_id, flow_id, link, target, environ, cwd):
             " nothing was started",
             available=sorted(strategies),
         )
-    allowed = account.policy(url, master, connection)
+    allowed = account.policy(url, credential, connection)
     if allowed is not None and strategy not in allowed:
         raise Fault(
             "platform_not_allowed",
-            f"the account may not use {strategy}; whoever issued {settings.TOKEN_VARIABLE} allows"
+            f"the account may not use {strategy}; whoever gave the operator access allows"
             " it, nothing was started",
             allowed=sorted(allowed),
         )
@@ -313,23 +321,26 @@ def connect(strategy, placement, form_id, flow_id, link, target, environ, cwd):
                 " was started",
                 missing=missing,
             )
-        state = start(url, master, connection, strategy, form, lookup(channel_variable(strategy)))
+        state = start(url, credential, connection, strategy, form, lookup(channel_variable(strategy)))
     else:
-        state = flow_call(url, master, connection, "GET", flow_path(flow_id))
-        state = wait_past_redirect(url, master, connection, flow_id, state)
+        state = flow_call(url, credential, connection, "GET", flow_path(flow_id))
+        state = wait_past_redirect(url, credential, connection, flow_id, state)
     report["flow"] = state.get("flowId", flow_id)
 
     def send(step_input):
         try:
-            return flow_call(url, master, connection, "POST", flow_path(report["flow"]), {"input": step_input})
+            return flow_call(url, credential, connection, "POST", flow_path(report["flow"]), {"input": step_input})
         except Fault as fault:
+            if fault.details.get("trouble"):
+                fault.details["flow"] = report["flow"]
+                fault.message += "; add --flow with error.flow"
             if fault.code != "step_refused":
                 raise
             fault.details["flow"] = report["flow"]
             problem = fault.details["problem"]
             reason = (problem.get("details") or {}).get("reason")
             if problem.get("code") == "TARGET_UNAVAILABLE" and isinstance(reason, str):
-                who = (report.get("account") or {}).get("name") or "the account"
+                who = (report.get("identity") or {}).get("name") or "the publishing identity"
                 fault.details["reason"] = reason
                 fault.message = "TARGET_UNAVAILABLE: " + TARGET_REASONS.get(reason, OTHER_REASON).format(
                     who=who, reason=reason
@@ -339,13 +350,21 @@ def connect(strategy, placement, form_id, flow_id, link, target, environ, cwd):
     sent_fields = False
     while True:
         if isinstance(state.get("account"), dict):
-            report["account"] = state["account"]
+            report["identity"] = state["account"]
         if "error" in state:
+            code = state["error"].get("code")
+            outage = code in transport.TEMPORARY
             report["error"] = {
                 "code": "flow_ended",
-                "message": f"the flow ended with {state['error'].get('code')}; connect again"
-                " without --flow once the operator has dealt with it",
+                "message": f"the flow ended with {code}; "
+                + (
+                    "temporary trouble on the service's side, not in the operator's setup: connect"
+                    " again without --flow in a minute"
+                    if outage
+                    else "connect again without --flow once the operator has dealt with it"
+                ),
                 "problem": state["error"],
+                **({"trouble": "service"} if outage else {}),
             }
             return report
         if "authorization" in state:
@@ -364,7 +383,8 @@ def connect(strategy, placement, form_id, flow_id, link, target, environ, cwd):
             return stop(
                 report, kind,
                 "give the operator url to open, sign in with the account that publishes and allow"
-                " access; once they have, run again with --flow",
+                " access. The page then says \"You're signed in\" and closes, or \"Sign-in wasn't"
+                " completed\"; after either, they come back here and you run again with --flow",
                 url=step.get("url"),
             )
         elif kind == "target" and step.get("targets") is not None:
@@ -390,7 +410,7 @@ def connect(strategy, placement, form_id, flow_id, link, target, environ, cwd):
             raise Fault(
                 "step_unsupported",
                 f"the flow asks for a {kind} step, which this script does not run; tell"
-                " whoever runs the service",
+                " whoever gave the operator access",
             )
 
 
@@ -410,7 +430,7 @@ def complete(report, state, path, lookup, strategy, form):
         ok=True,
         channel=channel_id,
         title=title,
-        account=identity,
+        identity=identity,
         cleared=cleared,
         stored=[name for name in variables if lookup.source(name) == "store"],
     )

@@ -3,10 +3,11 @@
 # copy without secrets to share. One NAME=value per line; an empty value is
 # unset. The amplify-setup skill fills this file in.
 
-# The service's https root and master token, name:secret, from https://smmtp.ru
-# or mail@smmtp.ru.
+# The service's https root, the account name and its secret, from
+# https://smmtp.ru or mail@smmtp.ru.
 AMPLIFY_REST_URL=
-AMPLIFY_REST_TOKEN=
+AMPLIFY_REST_ACCOUNT=
+AMPLIFY_REST_SECRET=
 
 # The app token that publishes; amplify.py app-token writes it.
 AMPLIFY_REST_APP_TOKEN=
@@ -18,7 +19,7 @@ AMPLIFY_MEDIA_GATEWAY_TOKEN=
 # Read empty secrets from a store; {name} is the variable's name. macOS keychain:
 # AMPLIFY_REST_SECRET_COMMAND=security find-generic-password -s {name} -w
 
-# Certificate bundle to trust after CERTIFICATE_VERIFY_FAILED. macOS:
+# Certificate bundle, only for a network that replaces certificates:
 # SSL_CERT_FILE=/etc/ssl/cert.pem
 
 # One channel per platform; amplify.py connect writes them, for example:

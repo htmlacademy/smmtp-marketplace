@@ -30,6 +30,10 @@ def publishing_forms(entry, placement):
     ]
 
 
+def takes_threads(entry):
+    return any((form.get("publish") or {}).get("thread") is True for form in publishing_forms(entry, "post"))
+
+
 def connectable(form):
     steps = form.get("steps") or []
     return bool(steps) and set(steps) <= FLOW_STEPS and form.get("available") is True
@@ -101,7 +105,9 @@ def platform_problem(name, value, fields):
     return f"{name} {problem} for {fields[name][0]}" if problem else None
 
 
-def build_body(operation, markdown, targets, channels, media, placement="post", telegram_format="regular"):
+def build_body(
+    operation, markdown, targets, channels, media, placement="post", telegram_format="regular", threaded=(),
+):
     destinations = []
     for strategy in targets:
         destination = {"id": strategy}
@@ -109,11 +115,12 @@ def build_body(operation, markdown, targets, channels, media, placement="post", 
             destination["strategy"] = strategy
         else:
             destination["channelId"] = channels[strategy]
-        destination["options"] = (
-            {"messageFormat": telegram_format}
-            if strategy == "telegram" and telegram_format != "regular"
-            else {}
-        )
+        options = {}
+        if strategy == "telegram" and telegram_format != "regular":
+            options["messageFormat"] = telegram_format
+        if strategy in threaded:
+            options["overflow"] = "thread"
+        destination["options"] = options
         destinations.append(destination)
     body = {
         "input": {

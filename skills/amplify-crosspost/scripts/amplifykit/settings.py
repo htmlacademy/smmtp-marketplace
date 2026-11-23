@@ -10,7 +10,9 @@ from .errors import Fault
 
 CONFIG_PATH = Path(".smmtp", ".env.local")
 URL_VARIABLE = "AMPLIFY_REST_URL"
-TOKEN_VARIABLE = "AMPLIFY_REST_TOKEN"
+ACCOUNT_VARIABLE = "AMPLIFY_REST_ACCOUNT"
+SECRET_VARIABLE = "AMPLIFY_REST_SECRET"
+ACCOUNT_CREDENTIALS = f"{ACCOUNT_VARIABLE} and {SECRET_VARIABLE}"
 APP_TOKEN_VARIABLE = "AMPLIFY_REST_APP_TOKEN"
 GATEWAY_URL_VARIABLE = "AMPLIFY_MEDIA_GATEWAY_URL"
 GATEWAY_TOKEN_VARIABLE = "AMPLIFY_MEDIA_GATEWAY_TOKEN"
@@ -20,7 +22,9 @@ CHANNEL_PREFIX = "AMPLIFY_CHANNEL_"
 SECRET_PLACEHOLDER = "{name}"
 DEFAULTS = {"BLUESKY_HOST": "bsky.social"}
 SUBJECT = "default"
-SERVICE_TOKEN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}:[a-z2-7]{32}")
+ACCOUNT_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
+ACCOUNT_SECRET = re.compile(r"[a-z2-7]{32}")
+SERVICE_TOKEN = re.compile(rf"{ACCOUNT_NAME.pattern}:{ACCOUNT_SECRET.pattern}")
 CHANNEL_ID = re.compile(r"ch_[a-z2-7]{26}")
 VARIABLE_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
 
@@ -57,9 +61,9 @@ def read_text(path):
     try:
         return path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
-        raise Fault("config_unreadable", f"{path} is not UTF-8 text; the operator saves it as UTF-8")
+        raise Fault("config_unreadable", f"{path} is not UTF-8 text; the amplify-setup skill has it saved as UTF-8")
     except OSError as error:
-        raise Fault("config_unreadable", f"cannot read {path}: {error.strerror}; check its permissions")
+        raise Fault("config_unreadable", f"cannot read {path}: {error.strerror}; the amplify-setup skill has its permissions fixed")
 
 
 def read_config(path):
@@ -77,13 +81,13 @@ def parse_config(text, path):
         if not separator or not VARIABLE_NAME.fullmatch(name):
             raise Fault(
                 "config_invalid",
-                f"{path}:{number} is not NAME=value with an upper-case NAME; the operator corrects"
-                " that line",
+                f"{path}:{number} is not NAME=value with an upper-case NAME; the amplify-setup"
+                " skill has that line corrected",
             )
         if name in values:
             raise Fault(
                 "config_invalid",
-                f"{path}:{number} sets {name} a second time; the operator keeps one of the two",
+                f"{path}:{number} sets {name} a second time; the amplify-setup skill has one removed",
             )
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
@@ -137,13 +141,13 @@ def parse_secret_command(text):
     except ValueError as error:
         raise Fault(
             "secret_command_invalid",
-            f"{SECRET_COMMAND_VARIABLE}: {error}; the operator corrects its quoting",
+            f"{SECRET_COMMAND_VARIABLE}: {error}; the amplify-setup skill has its quoting corrected",
         )
     if command and not any(SECRET_PLACEHOLDER in part for part in command):
         raise Fault(
             "secret_command_invalid",
-            f"{SECRET_COMMAND_VARIABLE} must contain {SECRET_PLACEHOLDER}; the operator adds it"
-            " where the variable's name goes",
+            f"{SECRET_COMMAND_VARIABLE} must contain {SECRET_PLACEHOLDER} where the variable's"
+            " name goes; the amplify-setup skill has it added",
         )
     return command
 
@@ -153,7 +157,7 @@ def read_secret(command, name):
         raise Fault(
             "variable_name_invalid",
             f"not a variable name: {name!r}; the service names a connection field this script"
-            " cannot map to a variable: tell whoever runs the service",
+            " cannot map to a variable: tell whoever gave the operator access",
         )
     try:
         completed = subprocess.run(
@@ -166,8 +170,8 @@ def read_secret(command, name):
     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
         raise Fault(
             "secret_command_failed",
-            f"{SECRET_COMMAND_VARIABLE} for {name}: {error}; the operator runs the command in a"
-            " terminal and fixes it",
+            f"{SECRET_COMMAND_VARIABLE} for {name}: {error}; the amplify-setup skill has the"
+            " operator run it in a terminal and fix it",
         )
     if completed.returncode != 0:
         return None

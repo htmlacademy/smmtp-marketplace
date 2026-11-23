@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import errno
 import http.client
 import json
 import os
@@ -11,12 +12,14 @@ import urllib.request
 
 from .errors import Fault
 from .settings import (
+    ACCOUNT_CREDENTIALS,
+    ACCOUNT_VARIABLE,
     APP_TOKEN_VARIABLE,
     CERTIFICATE_VARIABLE,
     CONFIG_PATH,
     HEADER_SAFE,
+    SECRET_VARIABLE,
     SERVICE_TOKEN,
-    TOKEN_VARIABLE,
     URL_VARIABLE,
 )
 
@@ -25,6 +28,15 @@ TIMEOUT_SECONDS = 620
 CHECK_TIMEOUT_SECONDS = 30
 PUBLISH_PATH = "/v1/publish"
 PUBLISH_ADVICE = "; the post may already be published, check the platform before publishing again"
+SERVICE_TROUBLE = (
+    "; temporary trouble on the service's side, not in the operator's setup: change nothing, run"
+    " the same command once more in a minute, and if it repeats tell the operator to try again later"
+)
+NETWORK_TROUBLE = (
+    f"; this computer cannot reach the service: check the network and {URL_VARIABLE}, and ask the"
+    " operator whether their internet works"
+)
+NETWORK_ERRNOS = {errno.EPERM, errno.EACCES, errno.ENETUNREACH, errno.EHOSTUNREACH}
 NOT_STARTED = {
     "RUN_STORE_UNAVAILABLE",
     "RUN_CAPACITY_EXCEEDED",
@@ -33,15 +45,16 @@ NOT_STARTED = {
     "SPOOL_CAPACITY_EXCEEDED",
     "REQUEST_RECEIVE_TIMEOUT",
 }
+TEMPORARY = {*NOT_STARTED, "PROVIDER_RATE_LIMITED", "PROVIDER_UNAVAILABLE"}
 STARTED = {"RESULT_TOO_LARGE"}
 
 TOKEN_ADMISSION = {
-    "TOKEN_STRATEGY_DENIED": f"the account may not use one of these platforms; whoever issued {TOKEN_VARIABLE} allows it, or the platform is left out",
-    "TOKEN_PROFILE_LIMIT_EXCEEDED": f"the account allows fewer destinations of one platform; whoever issued {TOKEN_VARIABLE} raises its limit",
-    "TOKEN_FEATURE_DENIED": f"the account may not use this operation; whoever issued {TOKEN_VARIABLE} allows it",
-    "TOKEN_MEDIA_FILE_TOO_LARGE": f"a file is over the account's limit for one file; attach a smaller or shorter one, or whoever issued {TOKEN_VARIABLE} raises the limit",
-    "TOKEN_MEDIA_REQUEST_TOO_LARGE": f"the files are over the account's limit for one request; attach fewer or smaller files, or whoever issued {TOKEN_VARIABLE} raises the limit",
-    "TOKEN_ROLE_DENIED": f"the token may not call this: {TOKEN_VARIABLE} holds the master token and {APP_TOKEN_VARIABLE} the app token; the amplify-setup skill sets them",
+    "TOKEN_STRATEGY_DENIED": "the account may not use one of these platforms; whoever gave the operator access allows it, or the platform is left out",
+    "TOKEN_PROFILE_LIMIT_EXCEEDED": "the account allows fewer destinations of one platform; whoever gave the operator access raises its limit",
+    "TOKEN_FEATURE_DENIED": "the account may not use this operation; whoever gave the operator access allows it",
+    "TOKEN_MEDIA_FILE_TOO_LARGE": "a file is over the account's limit for one file; attach a smaller or shorter one, or whoever gave the operator access raises the limit",
+    "TOKEN_MEDIA_REQUEST_TOO_LARGE": "the files are over the account's limit for one request; attach fewer or smaller files, or whoever gave the operator access raises the limit",
+    "TOKEN_ROLE_DENIED": f"the saved credentials do not fit this call: {ACCOUNT_CREDENTIALS} connect channels and {APP_TOKEN_VARIABLE} publishes; the amplify-setup skill sets them",
 }
 
 
@@ -70,16 +83,23 @@ class RefuseRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def system_bundle():
+    if ssl.create_default_context().cert_store_stats()["x509_ca"]:
+        return None
+    return next((path for path in CERTIFICATE_BUNDLES if os.path.isfile(path)), None)
+
+
 def opener(cafile=None):
     handlers = [RefuseRedirect]
-    if cafile:
+    bundle = cafile or system_bundle()
+    if bundle:
         try:
-            context = ssl.create_default_context(cafile=cafile)
+            context = ssl.create_default_context(cafile=bundle)
         except (OSError, ssl.SSLError) as error:
             raise Fault(
                 "certificate_file_invalid",
-                f"{CERTIFICATE_VARIABLE}={cafile} cannot be loaded ({error}); the operator points"
-                " it at a PEM certificate bundle",
+                f"{CERTIFICATE_VARIABLE}={bundle} cannot be loaded ({error}); the amplify-setup"
+                " skill points it at a PEM certificate bundle",
             )
         handlers.append(urllib.request.HTTPSHandler(context=context))
     return urllib.request.build_opener(*handlers)
@@ -88,12 +108,14 @@ def opener(cafile=None):
 OPENER = opener()
 
 
-def service(lookup, variable=TOKEN_VARIABLE):
-    url, token = lookup(URL_VARIABLE), lookup(variable)
-    unset = [name for name, value in ((URL_VARIABLE, url), (variable, token)) if not value]
+def service(lookup, variable=None):
+    url = lookup(URL_VARIABLE)
+    names = (variable,) if variable else (ACCOUNT_VARIABLE, SECRET_VARIABLE)
+    values = [lookup(name) for name in names]
+    unset = [name for name, value in ((URL_VARIABLE, url), *zip(names, values)) if not value]
     if unset:
         raise Fault(
-            "environment_missing",
+            "settings_missing",
             f"not set: {', '.join(unset)}; the amplify-setup skill sets "
             + ("it" if len(unset) == 1 else "them")
             + f" in {CONFIG_PATH.as_posix()}",
@@ -102,19 +124,17 @@ def service(lookup, variable=TOKEN_VARIABLE):
     if not url.startswith("https://") or not HEADER_SAFE.fullmatch(url):
         raise Fault(
             "url_invalid",
-            f"{URL_VARIABLE} must be an https:// URL of visible ASCII characters; the operator"
-            " corrects it",
+            f"{URL_VARIABLE} must be an https:// URL of visible ASCII characters; the"
+            " amplify-setup skill corrects it",
         )
+    token = ":".join(values)
     if not SERVICE_TOKEN.fullmatch(token):
         raise Fault(
             "token_invalid",
-            f"{variable} is not a token of the form name:secret, the name and the 32-character"
-            " secret the service issued joined by a colon; "
-            + (
-                "the operator asks whoever runs the service for the master token"
-                if variable == TOKEN_VARIABLE
-                else "the amplify-setup skill issues a new one"
-            ),
+            f"{variable} is not an app token the service issued; the amplify-setup skill issues a new one"
+            if variable
+            else f"{ACCOUNT_CREDENTIALS} do not look as issued: ask the operator to paste the account"
+            " name and the 32-character secret again, as whoever gave them access sent them",
         )
     return url.rstrip("/"), token
 
@@ -127,8 +147,9 @@ def certificate_advice():
     bundle = next((path for path in CERTIFICATE_BUNDLES if os.path.isfile(path)), None)
     value = bundle or "<path of a certificate bundle>"
     return (
-        "this Python's trust store has no issuer for the service's certificate: run"
-        f" 'amplify.py config --root <dir> --set {CERTIFICATE_VARIABLE}={value}' and try again."
+        "this Python's trust store has no issuer for the service's certificate: the"
+        f" amplify-setup skill runs 'amplify.py config --root <dir> --set {CERTIFICATE_VARIABLE}={value}'"
+        " and tries again."
         f" Where {CERTIFICATE_VARIABLE} is already set, it names the wrong bundle or something"
         " intercepts TLS. Never disable certificate verification"
     )
@@ -159,16 +180,26 @@ def refusal_advice(path, status, problem, retry_after=None):
         )
     if publishing and code in NOT_STARTED:
         return "; nothing was published, so publishing again later posts it once"
-    if publishing and (code in STARTED or status >= 500):
+    if publishing and (code in STARTED or temporary(status, code)):
         return PUBLISH_ADVICE
-    if code in NOT_STARTED or status >= 500:
-        return "; try again later"
+    if temporary(status, code):
+        return SERVICE_TROUBLE
     return "; error.problem names the cause"
+
+
+def temporary(status, code):
+    return status >= 500 or code in TEMPORARY
+
+
+def network_trouble(reason):
+    if isinstance(reason, socket.gaierror):
+        return True
+    return isinstance(reason, OSError) and reason.errno in NETWORK_ERRNOS
 
 
 def call(
     url, token, method, path, payload=None, opener=OPENER, timeout=TIMEOUT_SECONDS, headers=None,
-    token_variable=TOKEN_VARIABLE,
+    token_variable=ACCOUNT_CREDENTIALS,
 ):
     basic = base64.b64encode(token.encode("ascii")).decode("ascii")
     headers = {"Authorization": f"Basic {basic}", "Accept": "application/json", **(headers or {})}
@@ -193,36 +224,37 @@ def call(
         code = problem.get("code") if isinstance(problem, dict) else None
 
         if error.code == 404 and problem is None:
-            message += f"; the service accepts no such token here: {token_variable} or {URL_VARIABLE} is wrong" + (
-                "; the amplify-setup skill issues a new token"
+            message += f"; the service accepts no such credentials: {token_variable} or {URL_VARIABLE} is wrong" + (
+                "; the amplify-setup skill issues a new one"
                 if token_variable == APP_TOKEN_VARIABLE
-                else "; the operator checks both with whoever gave them access"
+                else "; the operator checks the account name and secret with whoever gave them access"
             )
         elif error.code == 404 and code in (None, "ROUTE_NOT_FOUND"):
-            message += f"; the token works and the route is missing: {URL_VARIABLE} must be the service root, without a path"
+            message += f"; the credentials work and the route is missing: {URL_VARIABLE} must be the service root, without a path"
         elif 300 <= error.code < 400:
             message += (
-                f"; this script follows no redirect with the token, so the operator sets"
-                f" {URL_VARIABLE} to the service's final https URL"
+                f"; this script follows no redirect with credentials, so the amplify-setup skill"
+                f" sets {URL_VARIABLE} to the service's final https URL"
             )
         else:
             message += refusal_advice(path, error.code, problem, (error.headers or {}).get("Retry-After"))
-        raise Fault("service_rejected", message, problem=problem)
+        details = {"problem": problem}
+        if temporary(error.code, code):
+            details["trouble"] = "service"
+        raise Fault("service_rejected", message, **details)
     except urllib.error.URLError as error:
         reason = error.reason
         message = f"{method} {path} failed: {reason}"
         if isinstance(reason, ssl.SSLCertVerificationError):
-            message += f"; {certificate_advice()}"
-        elif isinstance(reason, (socket.timeout, TimeoutError)):
-            message += advice or f"; check the network and {URL_VARIABLE}"
-        else:
-            message += f"; check the network and {URL_VARIABLE}"
-        raise Fault("service_unreachable", message)
+            raise Fault("service_unreachable", f"{message}; {certificate_advice()}")
+        if network_trouble(reason):
+            raise Fault("service_unreachable", message + NETWORK_TROUBLE, trouble="network")
+        raise Fault("service_unreachable", message + (advice or SERVICE_TROUBLE), trouble="service")
     except (OSError, http.client.HTTPException) as error:
         raise Fault(
             "service_unreachable",
-            f"{method} {path} lost the answer: {type(error).__name__}"
-            + (advice or f"; check the network and {URL_VARIABLE}"),
+            f"{method} {path} lost the answer: {type(error).__name__}" + (advice or SERVICE_TROUBLE),
+            trouble="service",
         )
     if not raw:
         return None
@@ -252,7 +284,7 @@ def strategies(capabilities):
         raise unexpected_shape("GET", "/v1/capabilities")
 
 
-def capabilities(url, token, connection, token_variable=TOKEN_VARIABLE):
+def capabilities(url, token, connection, token_variable=ACCOUNT_CREDENTIALS):
     return strategies(
         call(
             url, token, "GET", "/v1/capabilities", opener=connection,

@@ -4,33 +4,42 @@ from . import account, settings, transport
 from .errors import Fault
 from .platforms import build_body
 from .settings import (
+    ACCOUNT_VARIABLE,
     APP_TOKEN_VARIABLE,
     GATEWAY_TOKEN_VARIABLE,
     GATEWAY_URL_VARIABLE,
     SECRET_COMMAND_VARIABLE,
+    SECRET_VARIABLE,
     SERVICE_TOKEN,
-    TOKEN_VARIABLE,
     URL_VARIABLE,
     channel_variable,
     https_origin_problem,
 )
 
 
-def sources(lookup, names):
-    return {name: lookup.source(name) for name in names}
+NEXT_STEPS = {
+    "service": "follow service.error.message",
+    "app_token": "run app-token",
+    "media_gateway": f"set {GATEWAY_URL_VARIABLE} and {GATEWAY_TOKEN_VARIABLE} with config",
+    "platforms": "run connect for each platform the operator wants that has no working channel",
+    "verify": "run doctor once with a --to for every platform in platforms.unverified",
+}
+
+
+def unset(lookup, names):
+    return [name for name in names if lookup.source(name) is None]
 
 
 def media_gateway_report(lookup):
-    variables = sources(lookup, (GATEWAY_URL_VARIABLE, GATEWAY_TOKEN_VARIABLE))
-    found = sum(source is not None for source in variables.values())
+    missing = unset(lookup, (GATEWAY_URL_VARIABLE, GATEWAY_TOKEN_VARIABLE))
     url = lookup(GATEWAY_URL_VARIABLE)
-    state = ("none", "partial", "complete")[found]
+    state = ("complete", "partial", "none")[len(missing)]
     if state == "complete" and https_origin_problem(url):
         state = "invalid"
-    return {"url": url, "state": state, "variables": variables}
+    return {"url": url, "state": state, "unset": missing}
 
 
-def app_token_report(lookup, url, master, connection):
+def app_token_report(lookup, url, credential, connection):
     token = lookup(APP_TOKEN_VARIABLE)
     if not token:
         return {"state": "none"}
@@ -44,21 +53,25 @@ def app_token_report(lookup, url, master, connection):
         )
         listed = next(
             (
-                entry for entry in account.app_tokens(url, master, connection)
+                entry for entry in account.app_tokens(url, credential, connection)
                 if entry.get("name") == name and entry.get("status") == "active"
             ),
             None,
         )
     except Fault as fault:
+        if fault.details.get("trouble"):
+            raise
         return {"state": "unusable", "error": fault.as_object()}
     reason = "is not an active token of this account" if listed is None else account.app_token_problem(listed)
     return {"state": "unusable", "reason": reason} if reason else {"state": "working"}
 
 
-def channel_report(url, master, connection, channel_id):
+def channel_report(url, credential, connection, channel_id):
     try:
-        entry = account.channel(url, master, connection, channel_id)
+        entry = account.channel(url, credential, connection, channel_id)
     except Fault as fault:
+        if fault.details.get("trouble"):
+            raise
         if (fault.details.get("problem") or {}).get("code") == "CHANNEL_NOT_FOUND":
             return {"state": "gone"}
         return {"state": "error", "error": fault.as_object()}
@@ -84,14 +97,14 @@ def verify_entry(outcome):
     return entry
 
 
-def platforms_report(targets, strategies, lookup, url, master, connection, verify, placement):
+def platforms_report(targets, strategies, lookup, url, credential, connection, verify, placement):
     channels = {}
     for strategy in sorted(set(strategies) | set(targets)):
         channel_id = lookup(channel_variable(strategy))
         if not channel_id and strategy not in targets:
             continue
         entry = {"channel": channel_id}
-        entry.update(channel_report(url, master, connection, channel_id) if channel_id else {"state": "none"})
+        entry.update(channel_report(url, credential, connection, channel_id) if channel_id else {"state": "none"})
         if strategy in targets:
             entry["verify"] = None
         channels[strategy] = entry
@@ -115,6 +128,8 @@ def platforms_report(targets, strategies, lookup, url, master, connection, verif
             for outcome in verify(ready, {strategy: channels[strategy]["channel"] for strategy in ready}):
                 channels[outcome["strategy"]]["verify"] = verify_entry(outcome)
         except Fault as fault:
+            if fault.details.get("trouble"):
+                raise
             section["error"] = fault.as_object()
         except (AttributeError, KeyError, TypeError):
             section["error"] = transport.unexpected_shape("POST", "/v1/verify").as_object()
@@ -127,11 +142,12 @@ def doctor(targets, environ, cwd, placement="post"):
     connection = transport.opener(cafile)
     service_section = {
         "url": lookup(URL_VARIABLE),
-        "variables": sources(lookup, (URL_VARIABLE, TOKEN_VARIABLE)),
+        "unset": unset(lookup, (URL_VARIABLE, ACCOUNT_VARIABLE, SECRET_VARIABLE)),
     }
     report = {
         "ok": False,
-        "next": "service",
+        "stage": "service",
+        "next": NEXT_STEPS["service"],
         "config": str(path) if path else None,
         "secret_command": (
             "environment" if environ.get(SECRET_COMMAND_VARIABLE)
@@ -144,41 +160,43 @@ def doctor(targets, environ, cwd, placement="post"):
         "platforms": None,
     }
     try:
-        url, master = transport.service(lookup)
+        url, credential = transport.service(lookup)
         status = transport.call(
-            url, master, "GET", "/v1/status", opener=connection,
+            url, credential, "GET", "/v1/status", opener=connection,
             timeout=transport.CHECK_TIMEOUT_SECONDS,
         )
         try:
             service_section["readiness"] = status["result"]["readiness"]
         except (KeyError, TypeError):
             raise transport.unexpected_shape("GET", "/v1/status")
-        account.check_master(url, master, connection)
-        strategies = transport.capabilities(url, master, connection)
+        account.check_account(url, credential, connection)
+        strategies = transport.capabilities(url, credential, connection)
+        report["app_token"] = app_token_report(lookup, url, credential, connection)
+
+        def verify(ready, channels):
+            if report["app_token"]["state"] != "working":
+                raise Fault(
+                    "app_token_unusable",
+                    f"{APP_TOKEN_VARIABLE} does not work, so nothing was checked; run 'amplify.py"
+                    " app-token' first",
+                )
+            body = build_body("verify", None, ready, channels, [], placement)
+            answer = transport.call(
+                url, lookup(APP_TOKEN_VARIABLE), "POST", "/v1/verify", transport.json_payload(body),
+                opener=connection, token_variable=APP_TOKEN_VARIABLE,
+            )
+            return answer["result"]["outcomes"]
+
+        report["platforms"] = platforms_report(
+            targets, strategies, lookup, url, credential, connection, verify, placement
+        )
     except Fault as fault:
         service_section["error"] = fault.as_object()
+        report["app_token"] = report["platforms"] = None
         return report
-    report["app_token"] = app_token_report(lookup, url, master, connection)
-
-    def verify(ready, channels):
-        if report["app_token"]["state"] != "working":
-            raise Fault(
-                "app_token_unusable",
-                f"{APP_TOKEN_VARIABLE} does not work, so nothing was checked; run 'amplify.py"
-                " app-token' first",
-            )
-        body = build_body("verify", None, ready, channels, [], placement)
-        answer = transport.call(
-            url, lookup(APP_TOKEN_VARIABLE), "POST", "/v1/verify", transport.json_payload(body),
-            opener=connection, token_variable=APP_TOKEN_VARIABLE,
-        )
-        return answer["result"]["outcomes"]
-
-    report["platforms"] = platforms_report(
-        targets, strategies, lookup, url, master, connection, verify, placement
-    )
     report["ok"] = not problems(report)
-    report["next"] = next_stage(report)
+    report["stage"] = next_stage(report)
+    report["next"] = NEXT_STEPS.get(report["stage"])
     return report
 
 
