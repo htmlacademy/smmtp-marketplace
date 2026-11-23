@@ -11,10 +11,10 @@ APP_TOKEN_ROLE = "publish"
 APP_TOKEN_PREFIX = "crosspost-"
 
 
-def master_call(url, master, connection, method, path, body=None):
+def account_call(url, credential, connection, method, path, body=None):
     payload = transport.json_payload(body) if body is not None else None
     return transport.call(
-        url, master, method, path, payload, opener=connection, timeout=transport.CHECK_TIMEOUT_SECONDS
+        url, credential, method, path, payload, opener=connection, timeout=transport.CHECK_TIMEOUT_SECONDS
     )
 
 
@@ -28,25 +28,25 @@ def allowed_strategies(token_answer):
     return allowed
 
 
-def policy(url, master, connection):
-    return allowed_strategies(master_call(url, master, connection, "GET", "/v1/token"))
+def policy(url, credential, connection):
+    return allowed_strategies(account_call(url, credential, connection, "GET", "/v1/token"))
 
 
-def check_master(url, master, connection):
+def check_account(url, credential, connection):
     query = urllib.parse.urlencode({"subject": SUBJECT})
-    master_call(url, master, connection, "GET", f"/v1/channels?{query}")
+    account_call(url, credential, connection, "GET", f"/v1/channels?{query}")
 
 
-def channel(url, master, connection, channel_id):
+def channel(url, credential, connection, channel_id):
     path = f"/v1/channels/{urllib.parse.quote(channel_id, safe='')}"
-    answer = master_call(url, master, connection, "GET", path)
+    answer = account_call(url, credential, connection, "GET", path)
     if not isinstance(answer, dict) or not isinstance(answer.get("authorizations"), list):
         raise transport.unexpected_shape("GET", "/v1/channels/{channelId}")
     return answer
 
 
-def app_tokens(url, master, connection):
-    answer = master_call(url, master, connection, "GET", "/v1/app-tokens")
+def app_tokens(url, credential, connection):
+    answer = account_call(url, credential, connection, "GET", "/v1/app-tokens")
     try:
         return list(answer["appTokens"])
     except (KeyError, TypeError):
@@ -64,20 +64,20 @@ def app_token_problem(entry):
     return None
 
 
-def issue_app_token(url, master, connection):
+def issue_app_token(url, credential, connection):
     body = {"role": APP_TOKEN_ROLE, "subjects": [SUBJECT], "name": APP_TOKEN_PREFIX + secrets.token_hex(4)}
-    answer = master_call(url, master, connection, "POST", "/v1/app-tokens", body)
+    answer = account_call(url, credential, connection, "POST", "/v1/app-tokens", body)
     try:
         return answer["name"], f"{answer['name']}:{answer['secret']}"
     except (KeyError, TypeError):
         raise transport.unexpected_shape("POST", "/v1/app-tokens")
 
 
-def revoke_app_token(url, master, connection, name):
-    for entry in app_tokens(url, master, connection):
+def revoke_app_token(url, credential, connection, name):
+    for entry in app_tokens(url, credential, connection):
         if entry.get("name") == name and entry.get("status") == "active":
             path = f"/v1/app-tokens/{urllib.parse.quote(str(entry.get('id')), safe='')}"
-            master_call(url, master, connection, "DELETE", path)
+            account_call(url, credential, connection, "DELETE", path)
             return name
     return None
 

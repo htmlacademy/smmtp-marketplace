@@ -5,6 +5,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from .errors import Fault
+
 API = "https://api.telegram.org"
 TIMEOUT_SECONDS = 20
 MAXIMUM_BYTES = 4 * 1024 * 1024
@@ -29,12 +31,25 @@ def call(token, method, params, opener):
     return answer if isinstance(answer, dict) else None
 
 
-def recent_channels(token, opener):
+def updates(token, opener):
     answer = call(token, "getUpdates", {}, opener)
+    if answer and answer.get("error_code") == 401:
+        raise Fault(
+            "bot_token_rejected",
+            "Telegram refused the bot's key: the operator copies it from @BotFather again and it"
+            " is saved with config, nothing was started",
+        )
     if not answer or not answer.get("ok") or not isinstance(answer.get("result"), list):
         return None
+    return answer["result"]
+
+
+def recent_channels(token, opener):
+    found = updates(token, opener)
+    if found is None:
+        return None
     latest = {}
-    for update in answer["result"]:
+    for update in found:
         member = (update or {}).get("my_chat_member") or {}
         chat = member.get("chat") or {}
         status = (member.get("new_chat_member") or {}).get("status")
@@ -44,11 +59,11 @@ def recent_channels(token, opener):
 
 
 def business_connection(token, opener):
-    answer = call(token, "getUpdates", {}, opener)
-    if not answer or not answer.get("ok") or not isinstance(answer.get("result"), list):
+    updates_found = updates(token, opener)
+    if updates_found is None:
         return False
     found = None
-    for update in answer["result"]:
+    for update in updates_found:
         connection = (update or {}).get("business_connection") or {}
         rights = connection.get("rights") or {}
         if connection.get("id") and connection.get("is_enabled") and rights.get("can_manage_stories"):

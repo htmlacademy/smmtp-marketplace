@@ -31,6 +31,8 @@ def entry_for(item, placement, strategies, allowed, lookup):
     try:
         form = choose_form(platform, strategies[platform], placement, None, item)
     except Fault as fault:
+        if fault.code == "placement_unavailable":
+            return {**entry, "available": False, "reason": f"{platform} has no {placement}"}
         if fault.code != "form_ambiguous":
             return {**entry, "available": False, "reason": "the service cannot connect it"}
         return {
@@ -55,28 +57,30 @@ def plan(link_texts, platforms, placement, environ, cwd):
     report = {"ok": True, "placement": placement, "service": None}
     strategies = allowed = None
     try:
-        url, master = transport.service(lookup)
+        url, credential = transport.service(lookup)
         connection = transport.opener(cafile)
-        offered = transport.capabilities(url, master, connection)
-        allowed = account.policy(url, master, connection)
+        offered = transport.capabilities(url, credential, connection)
+        allowed = account.policy(url, credential, connection)
         strategies = offered
         report["service"] = "ready"
     except Fault as fault:
         report["service"] = fault.code
+        if fault.details.get("trouble"):
+            report["trouble"] = fault.details["trouble"]
     report["channels"] = [entry_for(item, placement, strategies, allowed, lookup) for item in items]
     if strategies is not None:
         for entry in report["channels"]:
             if entry["connected"]:
                 channel_id = lookup(channel_variable(entry["platform"]))
-                entry.update(connected_channel(url, master, connection, channel_id, placement))
+                entry.update(connected_channel(url, credential, connection, channel_id, placement))
     return report
 
 
-def connected_channel(url, master, connection, channel_id, placement):
+def connected_channel(url, credential, connection, channel_id, placement):
     try:
-        found = account.channel(url, master, connection, channel_id)
+        found = account.channel(url, credential, connection, channel_id)
     except Fault as fault:
         gone = (fault.details.get("problem") or {}).get("code") == "CHANNEL_NOT_FOUND"
-        return {"connected": not gone, "title": None}
+        return {"connected": False if gone else None, "title": None}
     placements = (found.get("available") or {}).get("placements") or []
     return {"connected": placement in placements, "title": found.get("title")}

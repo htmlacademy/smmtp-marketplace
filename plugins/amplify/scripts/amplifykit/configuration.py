@@ -9,6 +9,9 @@ from . import links, settings, transport
 from .errors import Fault
 from .platforms import connection_fields, platform_problem
 from .settings import (
+    ACCOUNT_NAME,
+    ACCOUNT_SECRET,
+    ACCOUNT_VARIABLE,
     APP_TOKEN_VARIABLE,
     CERTIFICATE_VARIABLE,
     CHANNEL_ID,
@@ -19,8 +22,8 @@ from .settings import (
     HEADER_SAFE,
     SECRET_COMMAND_VARIABLE,
     SECRET_PLACEHOLDER,
+    SECRET_VARIABLE,
     SERVICE_TOKEN,
-    TOKEN_VARIABLE,
     URL_VARIABLE,
     VARIABLE_NAME,
     https_origin_problem,
@@ -43,6 +46,8 @@ def parse_pairs(pairs):
                 " value; nothing was written",
             )
         values[name] = value.strip()
+    if SERVICE_TOKEN.fullmatch(values.get(SECRET_VARIABLE, "")):
+        values[ACCOUNT_VARIABLE], values[SECRET_VARIABLE] = values[SECRET_VARIABLE].split(":", 1)
     return values
 
 
@@ -105,7 +110,19 @@ def header_problem(value):
 def service_token_problem(value):
     if SERVICE_TOKEN.fullmatch(value):
         return None
-    return "must be name:secret, the token's name and its 32-character secret joined by a colon"
+    return "is not an app token the service issued"
+
+
+def account_problem(value):
+    if ACCOUNT_NAME.fullmatch(value):
+        return None
+    return "must be the account name as issued: lower-case Latin letters, digits and . _ -"
+
+
+def account_secret_problem(value):
+    if ACCOUNT_SECRET.fullmatch(value):
+        return None
+    return "must be the secret as issued: 32 characters, lower-case Latin letters and digits 2 to 7"
 
 
 def channel_problem(value):
@@ -139,7 +156,8 @@ def certificate_problem(value):
 LOCAL_CHECKS = {
     URL_VARIABLE: https_origin_problem,
     GATEWAY_URL_VARIABLE: https_origin_problem,
-    TOKEN_VARIABLE: service_token_problem,
+    ACCOUNT_VARIABLE: account_problem,
+    SECRET_VARIABLE: account_secret_problem,
     APP_TOKEN_VARIABLE: service_token_problem,
     GATEWAY_TOKEN_VARIABLE: header_problem,
     SECRET_COMMAND_VARIABLE: secret_command_problem,
@@ -232,8 +250,7 @@ def write_config(root, pairs, dry_run, environ):
             f"--root {root} is not a directory; pass the project root, or ~ for every project under it",
         )
     config, example = root / CONFIG_PATH, root / EXAMPLE_PATH
-    created = not config.is_file()
-    current = settings.read_text(TEMPLATE_SOURCE if created else config)
+    current = settings.read_text(config if config.is_file() else TEMPLATE_SOURCE)
     settings.parse_config(current, config)
     updated = merge(current, values, overwrite=True)
     checked, unchecked = validate(values, settings.parse_config(updated, config), environ)
@@ -241,8 +258,6 @@ def write_config(root, pairs, dry_run, environ):
         "ok": True,
         "dry_run": dry_run,
         "config": str(config),
-        "created": created,
-        "example": str(example),
         "changes": planned_changes(current, values),
         "checked": checked,
         "unchecked": unchecked,

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import settings, transport
 from .errors import Fault
-from .platforms import build_body
+from .platforms import build_body, takes_threads
 from .settings import (
     APP_TOKEN_VARIABLE,
     CONFIG_PATH,
@@ -97,6 +97,25 @@ def read_media(paths):
     return media
 
 
+def check_media_limits(media, policy):
+    per_file, per_request = policy.get("media_file_bytes"), policy.get("media_request_bytes")
+    advice = "attach a smaller or shorter file, or whoever gave the operator access raises the limit; nothing was sent"
+    for item in media:
+        if per_file is not None and item["size"] > per_file:
+            raise Fault(
+                "media_too_large",
+                f"{item['path']} is {item['size']} bytes, over the account's {per_file} per file; {advice}",
+                maximum_bytes=per_file,
+            )
+    total = sum(item["size"] for item in media)
+    if per_request is not None and total > per_request:
+        raise Fault(
+            "media_too_large",
+            f"the files come to {total} bytes, over the account's {per_request} per post; {advice}",
+            maximum_bytes=per_request,
+        )
+
+
 def media_gateway(lookup):
     origin, bearer = lookup(GATEWAY_URL_VARIABLE), lookup(GATEWAY_TOKEN_VARIABLE)
     if not (origin and bearer):
@@ -105,7 +124,7 @@ def media_gateway(lookup):
     if problem:
         raise Fault(
             "gateway_url_invalid",
-            f"{GATEWAY_URL_VARIABLE} {problem}; the operator corrects it, nothing was sent",
+            f"{GATEWAY_URL_VARIABLE} {problem}; the amplify:setup skill corrects it, nothing was sent",
         )
     return {"origin": origin, "bearer": bearer}
 
@@ -214,20 +233,36 @@ def summarise(command, result, media):
 
 
             projection = outcome.get("projection", {})
-            measurements = outcome.get("measurements", projection.get("measurements"))
-            if measurements is not None:
-                entry["measurements"] = measurements
-            if "body" in projection:
+            if outcome.get("measurements") is not None:
+                entry["measurements"] = outcome["measurements"]
+            if projection.get("parts"):
+                entry["parts"] = [
+                    {
+                        "projection": part.get("body"),
+                        "files": [files.get(media_id) for media_id in part.get("media", [])],
+                    }
+                    for part in projection["parts"]
+                ]
+            elif "body" in projection:
                 entry["projection"] = projection["body"]
             if outcome.get("pendingChecks"):
                 entry["pending_checks"] = coded(outcome["pendingChecks"], files)
         else:
             if "url" in outcome:
                 entry["url"] = outcome["url"]
+            if outcome.get("parts"):
+                entry["parts"] = [
+                    {"index": part.get("index"), "state": part.get("state"), "url": part.get("url")}
+                    for part in outcome["parts"]
+                ]
 
         if other_changes:
             entry["changes"] = [
-                {"subject": change.get("subject"), "class": change.get("class"), "details": change.get("details", {})}
+                {
+                    "subject": {key: value for key, value in (change.get("subject") or {}).items() if key != "range"},
+                    "class": change.get("class"),
+                    "details": change.get("details", {}),
+                }
                 for change in other_changes
             ]
         if media_changes:
@@ -254,7 +289,14 @@ def outcome_ok(command, destinations, missing):
     )
 
 
-def run(command, folder, targets, media_paths, environ, cwd, placement="post", telegram_format="regular"):
+def text_was_cut(entry):
+    return any(change["details"].get("reason") == "text_truncated" for change in entry.get("changes", []))
+
+
+def run(
+    command, folder, targets, media_paths, environ, cwd, placement="post", telegram_format="regular",
+    thread=False,
+):
     targets = list(dict.fromkeys(targets))
     markdown = read_post(folder)
     media = read_media(media_paths)
@@ -273,7 +315,7 @@ def run(command, folder, targets, media_paths, environ, cwd, placement="post", t
     if unknown:
         raise Fault(
             "platform_unknown",
-            f"not a platform ID the service offers: {', '.join(unknown)}; use one of"
+            f"not a platform the service offers: {', '.join(unknown)}; use one of"
             " error.available, nothing was sent",
             available=sorted(strategies),
         )
@@ -289,9 +331,24 @@ def run(command, folder, targets, media_paths, environ, cwd, placement="post", t
             missing=missing,
         )
 
+    if media:
+        answer = transport.call(
+            url, token, "GET", "/v1/token", opener=connection, timeout=transport.CHECK_TIMEOUT_SECONDS,
+            token_variable=APP_TOKEN_VARIABLE,
+        )
+        try:
+            policy = answer["token"]["policy"]
+        except (KeyError, TypeError):
+            raise transport.unexpected_shape("GET", "/v1/token")
+        check_media_limits(media, policy)
+
     operation = OPERATIONS[command]
     path = f"/v1/{operation}"
-    body = build_body(operation, markdown, targets, channels, media, placement, telegram_format)
+    threadable = {s for s in targets if placement == "post" and takes_threads(strategies[s])}
+    threaded = {
+        s for s in threadable if thread and not (s == "telegram" and telegram_format != "regular")
+    }
+    body = build_body(operation, markdown, targets, channels, media, placement, telegram_format, threaded)
     gateway = media_gateway(lookup) if media else None
 
     headers = (
@@ -314,6 +371,8 @@ def run(command, folder, targets, media_paths, environ, cwd, placement="post", t
         for entry in destinations:
             if entry["platform"] in missing:
                 entry["missing"] = missing[entry["platform"]]
+            if command == "preview" and entry["platform"] in threadable - threaded and text_was_cut(entry):
+                entry["thread_available"] = True
         ok = outcome_ok(command, destinations, missing)
     except (AttributeError, KeyError, TypeError):
         raise transport.unexpected_shape("POST", path)
